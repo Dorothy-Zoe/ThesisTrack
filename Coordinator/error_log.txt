@@ -1,0 +1,8 @@
+[18-Jul-2025 08:46:07 Europe/Berlin] PHP Warning:  Undefined array key "section_handled" in C:\xampp\htdocs\v5\Coordinator\coordinator_advisor-mngt.php on line 120
+[18-Jul-2025 08:46:17 Europe/Berlin] PHP Warning:  Undefined array key "section_handled" in C:\xampp\htdocs\v5\Coordinator\coordinator_advisor-mngt.php on line 120
+[18-Jul-2025 08:47:00 Europe/Berlin] PHP Warning:  Undefined array key "section_handled" in C:\xampp\htdocs\v5\Coordinator\coordinator_advisor-mngt.php on line 120
+[18-Jul-2025 08:47:56 Europe/Berlin] PHP Warning:  Undefined array key "section_handled" in C:\xampp\htdocs\v5\Coordinator\coordinator_advisor-mngt.php on line 120
+[18-Jul-2025 08:47:58 Europe/Berlin] PHP Warning:  Undefined array key "section_handled" in C:\xampp\htdocs\v5\Coordinator\coordinator_advisor-mngt.php on line 120
+[18-Jul-2025 08:48:31 Europe/Berlin] PHP Warning:  Undefined array key "section_handled" in C:\xampp\htdocs\v5\Coordinator\coordinator_advisor-mngt.php on line 116
+[18-Jul-2025 08:49:48 Europe/Berlin] PHP Warning:  Undefined array key "section_handled" in C:\xampp\htdocs\v5\Coordinator\coordinator_advisor-mngt.php on line 116
+[18-Jul-2025 08:54:30 Europe/Berlin] PHP Warning:  Undefined array key "section_handled" in C:\xampp\htdocs\v5\Coordinator\coordinator_advisor-mngt.php on line 116
