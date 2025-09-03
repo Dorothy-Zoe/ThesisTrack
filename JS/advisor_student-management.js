@@ -515,3 +515,106 @@ window.showConfirmModal = showConfirmModal;
 // =============== Start of version 6 update =============== 
 
 // ===============  End of version 6 update =============== 
+
+
+// ===============  Start of version 6 update =============== 
+
+document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.querySelector('.search-input');
+    const table = document.getElementById('groupsTable');
+    
+    // Function to filter table rows
+    function filterTable() {
+        const searchTerm = searchInput.value.toLowerCase();
+        const rows = table.querySelectorAll('tbody tr');
+        
+        rows.forEach(row => {
+            let rowMatches = false;
+            // Get all cells except the first (ID) and last (Actions)
+            const cells = row.querySelectorAll('td:not(:first-child):not(:last-child)');
+            
+            cells.forEach(cell => {
+                const cellText = cell.textContent.toLowerCase();
+                if (cellText.includes(searchTerm)) {
+                    rowMatches = true;
+                }
+            });
+            
+            row.style.display = rowMatches ? '' : 'none';
+            
+            // Highlight matching text
+            if (searchTerm && rowMatches) {
+                highlightMatches(row, searchTerm);
+            } else {
+                removeHighlights(row);
+            }
+        });
+        
+        // Show "No results" message if all rows are hidden
+        showNoResultsMessage();
+    }
+    
+    // Function to highlight matching text
+    function highlightMatches(row, searchTerm) {
+        const cells = row.querySelectorAll('td:not(:first-child):not(:last-child)');
+        
+        cells.forEach(cell => {
+            const text = cell.textContent;
+            const regex = new RegExp(`(${searchTerm})`, 'gi');
+            cell.innerHTML = text.replace(regex, '<span class="search-highlight">$1</span>');
+        });
+    }
+    
+    // Function to remove highlights
+    function removeHighlights(row) {
+        const highlights = row.querySelectorAll('.search-highlight');
+        highlights.forEach(highlight => {
+            const parent = highlight.parentNode;
+            parent.textContent = parent.textContent; // Simple way to remove HTML tags
+        });
+    }
+    
+    // Function to show "No results" message
+    function showNoResultsMessage() {
+        const visibleRows = table.querySelectorAll('tbody tr[style=""]').length;
+        const noDataRow = table.querySelector('.no-data');
+        
+        if (visibleRows === 0 && searchInput.value) {
+            if (!noDataRow) {
+                const row = document.createElement('tr');
+                row.className = 'no-data';
+                row.innerHTML = `
+                    <td colspan="8">
+                        <i class="fas fa-search-minus"></i>
+                        <p>No matching groups found</p>
+                        <p>Try a different search term</p>
+                    </td>
+                `;
+                table.querySelector('tbody').appendChild(row);
+            }
+        } else if (noDataRow) {
+            noDataRow.remove();
+        }
+    }
+    
+    // Add debounce to improve performance
+    function debounce(func, wait) {
+        let timeout;
+        return function() {
+            const context = this, args = arguments;
+            clearTimeout(timeout);
+            timeout = setTimeout(() => {
+                func.apply(context, args);
+            }, wait);
+        };
+    }
+    
+    // Event listeners
+    searchInput.addEventListener('input', debounce(filterTable, 300));
+    
+    // Trigger initial search if there's a search term
+    if (searchInput.value) {
+        filterTable();
+    }
+});
+// ===============  End of version 6 update =============== 

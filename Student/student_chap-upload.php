@@ -12,6 +12,32 @@ $user_id = $_SESSION['user_id'];
 $user_name = $_SESSION['name'];
 $user_section = $_SESSION['section'];
 
+// In your dashboard PHP code where you fetch the profile picture:
+$profile_picture = '../images/default-user.png'; // Default image
+
+try {
+    // Get student's profile picture path
+    $stmt = $pdo->prepare("SELECT profile_picture FROM students WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $student = $stmt->fetch();
+    
+    // Verify and set profile picture if exists
+    if (!empty($student['profile_picture'])) {
+        $relative_path = $student['profile_picture'];
+        $absolute_path = dirname(__DIR__) . '/' . $relative_path;
+        
+        // Check if file exists and is readable
+        if (file_exists($absolute_path) && is_readable($absolute_path)) {
+            $profile_picture = '../' . $relative_path;
+        }
+    }
+} catch (PDOException $e) {
+    error_log("Database error fetching profile picture: " . $e->getMessage());
+}
+
+
+
+
 //Get user's group information
 $userGroup = null;
 if (isset($pdo)) {
@@ -100,7 +126,10 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
             <div class="sidebar-header">
                 <h3>ThesisTrack</h3>
                 <div class="college-info">College of Information and Communication Technology</div>
-                <div class="sidebar-user"><img src="../images/default-user.png" class="sidebar-avatar" />
+                <div class="sidebar-user"> <img src="<?php echo htmlspecialchars($profile_picture); ?>" 
+         class="sidebar-avatar" 
+         alt="Profile Picture"
+         id="sidebarProfileImage" />
                 <div class="sidebar-username"><?php echo htmlspecialchars($user_name); ?></div></div>
                 <span class="role-badge">Student</span>
             </div>
@@ -145,13 +174,11 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
                 <button class="topbar-icon" title="Notifications">
                 <i class="fas fa-bell"></i></button>
                 <div class="user-info dropdown">
-                <img
-                src="../images/default-user.png"
-                alt="User Avatar"
-                class="user-avatar"
-                id="userAvatar"
-                tabindex="0"
-                />
+                <img src="<?php echo htmlspecialchars($profile_picture); ?>"
+     alt="User Avatar"
+     class="user-avatar"
+     id="userAvatar"
+     tabindex="0" />
         <div class="dropdown-menu" id="userDropdown">
           <a href="#" class="dropdown-item">
             <i class="fas fa-cog"></i> Settings

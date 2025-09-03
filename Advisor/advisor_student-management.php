@@ -10,6 +10,36 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'advisor') {
 $advisor_id = $_SESSION['user_id'];
 $advisor_name = $_SESSION['name'] ?? 'Advisor';
 
+$profile_picture = '../images/default-user.png'; // Default image
+
+try {
+    // Get advisor details including profile picture
+    $stmt = $pdo->prepare("SELECT first_name, last_name, profile_picture FROM advisors WHERE id = ?");
+    $stmt->execute([$advisor_id]);
+    $advisor = $stmt->fetch();
+    
+    $user_name = ($advisor['first_name'] && $advisor['last_name']) ? $advisor['first_name'] . ' ' . $advisor['last_name'] : 'Advisor';
+    
+    // Check if profile picture exists and is valid
+    if (!empty($advisor['profile_picture'])) {
+        $relative_path = $advisor['profile_picture'];
+        $absolute_path = __DIR__ . '/../' . $relative_path;
+        
+        if (file_exists($absolute_path) && is_readable($absolute_path)) {
+            $profile_picture = '../' . $relative_path;
+        } else {
+            error_log("Profile image not found: " . $absolute_path);
+        }
+    }
+
+
+} catch (PDOException $e) {
+    // Log the error and use default values
+    error_log("Database error fetching advisor details: " . $e->getMessage());
+    $user_name = 'Advisor';
+    $profile_picture = '../images/default-user.png';
+}
+
 // Get advisor's section and course
 try {
     $stmt = $pdo->prepare("SELECT sections_handled, department FROM advisors WHERE id = ?");
@@ -28,6 +58,32 @@ try {
     $available_sections = [];
 }
 
+// ================== version 7 update here  ================== //
+
+function getSortArrows($current_col, $sort_col, $sort_order) {
+    if ($current_col == $sort_col) {
+        // Active sorting - show caret up/down
+        $arrow = $sort_order == 'ASC' ? 'caret-up' : 'caret-down';
+        return '<i class="fas fa-'.$arrow.' active-arrow"></i>';
+    }
+    // Neutral state - show sort icon
+    return '<i class="fas fa-sort neutral-arrow"></i>';
+}
+
+// Sorting functionality
+$sort_column = $_GET['sort'] ?? 'last_name';
+$sort_order = $_GET['order'] ?? 'asc';
+$search_term = $_GET['search'] ?? '';
+$entries_per_page = $_GET['entries'] ?? 5; 
+
+// Validate sort column and order
+$valid_columns = ['student_id', 'first_name', 'last_name', 'email', 'section', 'group_count', 'status'];
+if (!in_array($sort_column, $valid_columns)) {
+    $sort_column = 'last_name';
+}
+$sort_order = strtolower($sort_order) === 'desc' ? 'DESC' : 'ASC';
+
+// ================== end of version 7 update here ================== //
 
 // Handle form actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -157,9 +213,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 }
 
-// Fetch students assigned to this advisor
+// Fetch students assigned to this advisor with sorting and searching
 try {
-    $stmt = $pdo->prepare("
+    $search_condition = '';
+    $params = [$advisor_id];
+    
+    if (!empty($search_term)) {
+        $search_condition = " AND (s.student_id LIKE ? OR s.first_name LIKE ? OR s.last_name LIKE ? OR s.email LIKE ? OR s.section LIKE ?)";
+        $search_param = "%$search_term%";
+        array_push($params, $search_param, $search_param, $search_param, $search_param, $search_param);
+    }
+
+    $query = "
         SELECT s.*, 
                CONCAT(s.first_name, ' ', s.middle_name, ' ', s.last_name) AS full_name,
                COALESCE(g.group_count, 0) as group_count,
@@ -173,14 +238,26 @@ try {
             JOIN groups gr ON gm.group_id = gr.id
             GROUP BY gm.student_id
         ) g ON s.id = g.student_id
-        WHERE s.advisor_id = ?
-        ORDER BY s.last_name, s.first_name
-    ");
-    $stmt->execute([$advisor_id]);
-    $students = $stmt->fetchAll();
+        WHERE s.advisor_id = ? $search_condition
+        ORDER BY $sort_column $sort_order
+    ";
+
+    $stmt = $pdo->prepare($query);
+    $stmt->execute($params);
+    $students = $stmt->fetchAll(); // Store all results in $all_students
+    
+    // Pagination
+    $total_students = count($students);
+    $total_pages = ceil($total_students / $entries_per_page);
+    $current_page = isset($_GET['page']) ? max(1, min((int)$_GET['page'], $total_pages)) : 1;
+    $offset = ($current_page - 1) * $entries_per_page;
+    $paginated_students = array_slice($students, $offset, $entries_per_page);
 } catch (PDOException $e) {
     $students = [];
+    $paginated_students = [];
+    error_log("Database error: " . $e->getMessage());
 }
+
 ?>
 
 
@@ -204,7 +281,7 @@ try {
             <div class="sidebar-header">
                 <h3>ThesisTrack</h3>
                 <div class="college-info">College of Information and Communication Technology</div>
-                <div class="sidebar-user"><img src="../images/default-user.png" class="image-sidebar-avatar" />
+                <div class="sidebar-user"><img src="<?php echo htmlspecialchars($profile_picture); ?>" class="image-sidebar-avatar" id="sidebarAvatar" />
                 <div class="sidebar-username"><?php echo htmlspecialchars($advisor_name); ?></div></div>
                 <span class="role-badge">Subject Advisor</span>
             </div>
@@ -259,7 +336,7 @@ try {
                             <i class="fas fa-bell"></i>
                         </button>
                             <div class="user-info dropdown">
-                                <img src="../images/default-user.png" alt="Avatar" class="headerAvatar" id="headerAvatar" tabindex="0" />
+                                 <img src="<?php echo htmlspecialchars($profile_picture); ?>" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0" />
                                 <div class="dropdown-menu" id="userDropdown">
                                     <a href="#" class="dropdown-item">
                                         <i class="fas fa-cog"></i> Settings
@@ -318,10 +395,42 @@ try {
                         </div>
                     <?php endif; ?>
 
-                    <!-- Students Table -->
+                     <!-- Show entries and Search-->
+                            <div class="table-controls-row">
+                                <div class="entries-selector">
+                                    <span>Show</span>
+                                    <select name="entries" onchange="this.form.submit()" class="entries-select">
+                                        <?php
+                                        $entries_options = [5, 10, 25, 50];
+                                        $selected_entries = $_GET['entries'] ?? 5;
+                                        
+                                        foreach ($entries_options as $option) {
+                                            $selected = ($option == $selected_entries) ? 'selected' : '';
+                                            echo "<option value='$option' $selected>$option</option>";
+                                        }
+                                        ?>
+                                    </select>
+                                    <span>entries</span>
+                                </div>
 
+                                <form class="modern-search" method="GET" action="">
+                                    <div class="search-container">
+                                        <i class="fas fa-search"></i>
+                                        <input type="text" name="search" placeholder="Search here..." class="search-input" 
+                                            value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
+                                    
+                                        <?php foreach ($_GET as $key => $value): ?>
+                                            <?php if ($key !== 'search' && $key !== 'page'): ?>
+                                                <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </form>
+                            </div>
+
+                    <!-- Students Table -->
                     <?php
-                    $students_per_page = 4; // How many students per page
+                    $students_per_page = 5; // How many students per page
                     $total_students = count($students);
                     $total_pages = ceil($total_students / $students_per_page);
                     $current_page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
@@ -332,18 +441,42 @@ try {
 
 
                     <div class="table-container">
-                        <table class="students-table">
-                            <thead>
-                                <tr>
-                                    <th>Student ID</th>
-                                    <th>Student Name</th>
-                                    <th>Email</th>
-                                    <th>Section</th>
-                                    <th>Group Assignment</th>
-                                    <th>Status</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
+                    <table class="students-table">
+                      <thead>
+                        <tr>
+                            <th>
+                                <a href="?sort=student_id&order=<?= $sort_column == 'student_id' && $sort_order == 'ASC' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>&entries=<?= $entries_per_page ?>">
+                                    Student ID <?= getSortArrows('student_id', $sort_column, $sort_order) ?>
+                                </a>
+                            </th>
+                            <th>
+                                <a href="?sort=last_name&order=<?= $sort_column == 'last_name' && $sort_order == 'ASC' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>&entries=<?= $entries_per_page ?>">
+                                    Student Name <?= getSortArrows('last_name', $sort_column, $sort_order) ?>
+                                </a>
+                            </th>
+                            <th>
+                                <a href="?sort=email&order=<?= $sort_column == 'email' && $sort_order == 'ASC' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>&entries=<?= $entries_per_page ?>">
+                                    Email <?= getSortArrows('email', $sort_column, $sort_order) ?>
+                                </a>
+                            </th>
+                            <th>
+                                <a href="?sort=section&order=<?= $sort_column == 'section' && $sort_order == 'ASC' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>&entries=<?= $entries_per_page ?>">
+                                    Section <?= getSortArrows('section', $sort_column, $sort_order) ?>
+                                </a>
+                            </th>
+                            <th>
+                                <a href="?sort=group_count&order=<?= $sort_column == 'group_count' && $sort_order == 'ASC' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>&entries=<?= $entries_per_page ?>">
+                                    Group Assignment <?= getSortArrows('group_count', $sort_column, $sort_order) ?>
+                                </a>
+                            </th>
+                            <th>
+                                <a href="?sort=status&order=<?= $sort_column == 'status' && $sort_order == 'ASC' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>&entries=<?= $entries_per_page ?>">
+                                    Status <?= getSortArrows('status', $sort_column, $sort_order) ?>
+                                </a>
+                            </th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
                             <tbody>
                                 <?php if (empty($students)): ?>
                                     <tr>
@@ -401,21 +534,20 @@ try {
                                 <?php endif; ?>
                             </tbody>
                         </table>
-
-                         <?php if ($total_pages > 1): ?>
-                            <div class="pagination">
-                                <?php for ($page = 1; $page <= $total_pages; $page++): ?>
-                                    <a class="page-link <?php echo ($page == $current_page) ? 'active' : ''; ?>" 
-                                    href="?page=<?php echo $page; ?>">
-                                    <?php echo $page; ?>
-                                    </a>
-                                <?php endfor; ?>
-                            </div>
-                        <?php endif; ?>
-
                     </div>
-                </div>
 
+                     <!-- Pagination -->
+                    <?php if ($total_pages > 1): ?>
+                    <div class="pagination">
+                        <?php for ($page = 1; $page <= $total_pages; $page++): ?>
+                            <a class="page-link <?= ($page == $current_page) ? 'active' : '' ?>" 
+                            href="?page=<?= $page ?>&sort=<?= $sort_column ?>&order=<?= $sort_order ?>&search=<?= urlencode($search_term) ?>&entries=<?= $entries_per_page ?>">
+                            <?= $page ?>
+                            </a>
+                        <?php endfor; ?>
+                    </div>
+                     <?php endif; ?>
+                </div>
             </main>
         </div>
     </div>
