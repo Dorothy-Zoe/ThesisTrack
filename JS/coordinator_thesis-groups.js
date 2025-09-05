@@ -290,3 +290,18 @@ $(document).ready(function() {
         window.location.href = 'coordinator_group-details.php?id=' + groupId;
     };
 });
+
+// =============== End of version 6 update =============== 
+
+
+// =============== Start of version 7 update =============== 
+
+document.querySelector('.search-input').addEventListener('keyup', function(e) {
+  if (e.key === 'Enter') {
+    // Submit search
+    this.form.submit();
+  }
+  
+});
+
+// =============== End of version 7 update =============== 

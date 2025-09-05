@@ -4,6 +4,9 @@ let advisorDropdownTimeout = null
 let credentialsTimeout = null;
 let currentAdvisorToDelete = null;
 
+
+const CREDENTIALS_DISPLAY_TIMEOUT = 120000;
+
 document.addEventListener("DOMContentLoaded", () => {
   initializeTabs(); 
   initializeEventListeners()
@@ -658,22 +661,21 @@ function saveAdvisor() {
       closeModal();
       
       if (action === 'add_advisor' && data.temp_password) {
-        // Show password modal for new advisor
-        showPasswordModal(data.temp_password, data.employee_id, data.email);
-        
-        // Clear the credentials after 2 minutes (120000 milliseconds)
-        const clearCredentials = () => {
-          document.getElementById('tempPassword').textContent = '********';
-          document.getElementById('employeeId').textContent = '********';
-          document.getElementById('createdEmail').textContent = '********';
-          document.getElementById('credentials-display').innerHTML = '<p class="text-muted">Credentials have expired and are no longer visible</p>';
-          document.getElementById('copyCredentialsBtn').style.display = 'none';
-        };
-        
-        setTimeout(clearCredentials, 120000);
-      }
+    // Show password modal for new advisor
+    showPasswordModal(data.temp_password, data.employee_id, data.email);
+    
+    // Clear any existing timeout
+    if (credentialsTimeout) {
+        clearTimeout(credentialsTimeout);
+    }
+    
+    // Set new timeout
+    credentialsTimeout = setTimeout(() => {
+        closePasswordModal();
+        window.location.reload();
+    }, CREDENTIALS_DISPLAY_TIMEOUT);
+    }
       
-      setTimeout(() => window.location.reload(), 1500);
     } else {
       showMessage(data.message || 'Failed to save advisor', 'error');
     }
@@ -765,11 +767,20 @@ function showPasswordModal(tempPassword, employeeId, email) {
  * Closes the password modal
  */
 function closePasswordModal() {
-  const modal = document.getElementById("passwordModal");
-  if (modal) {
-    modal.style.display = "none";
-    document.body.style.overflow = "auto";
-  }
+    const modal = document.getElementById("passwordModal");
+    if (modal) {
+        modal.style.display = "none";
+        document.body.style.overflow = "auto";
+        
+        // Clear the timeout if modal is closed manually
+        if (credentialsTimeout) {
+            clearTimeout(credentialsTimeout);
+            credentialsTimeout = null;
+        }
+        
+        // Reload the page to show the new advisor
+        window.location.reload();
+    }
 }
 
 // ==================== Utility Functions ====================

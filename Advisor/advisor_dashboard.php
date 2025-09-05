@@ -17,13 +17,29 @@ $pending_reviews = 0;
 $average_score = 0;
 $group_progress = [];
 
+$profile_picture = '../images/default-user.png'; // Default image
+
 try {
-    // Get advisor name
-    $stmt = $pdo->prepare("SELECT CONCAT(first_name, ' ', last_name) AS name FROM advisors WHERE id = ?");
+    // Get advisor details including profile picture
+    $stmt = $pdo->prepare("SELECT first_name, last_name, profile_picture FROM advisors WHERE id = ?");
     $stmt->execute([$advisor_id]);
     $advisor = $stmt->fetch();
-    $user_name = $advisor['name'] ?? 'Advisor';
+    
+    $user_name = ($advisor['first_name'] && $advisor['last_name']) ? $advisor['first_name'] . ' ' . $advisor['last_name'] : 'Advisor';
+    
+    // Check if profile picture exists and is valid
+    if (!empty($advisor['profile_picture'])) {
+        $relative_path = $advisor['profile_picture'];
+        $absolute_path = __DIR__ . '/../' . $relative_path;
+        
+        if (file_exists($absolute_path) && is_readable($absolute_path)) {
+            $profile_picture = '../' . $relative_path;
+        } else {
+            error_log("Profile image not found: " . $absolute_path);
+        }
+    }
 
+    
     // Get all groups assigned to this advisor with thesis titles
     $stmt = $pdo->prepare("
         SELECT 
@@ -74,9 +90,58 @@ try {
 
 } catch (PDOException $e) {
     error_log("Database error in advisor dashboard: " . $e->getMessage());
-    // Fallback values will be used if there's an error
+}
+
+// Handle profile picture upload via AJAX
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['profile_picture'])) {
+    header('Content-Type: application/json');
+    
+    try {
+        $file = $_FILES['profile_picture'];
+        
+        // Validate file
+        $allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
+        $maxSize = 2 * 1024 * 1024; // 2MB
+        
+        if (!in_array($file['type'], $allowedTypes)) {
+            echo json_encode(['success' => false, 'message' => 'Only JPG, PNG, and GIF images are allowed']);
+            exit();
+        }
+        
+        if ($file['size'] > $maxSize) {
+            echo json_encode(['success' => false, 'message' => 'Image must be less than 2MB']);
+            exit();
+        }
+        
+        // Create upload directory if it doesn't exist
+        $uploadDir = '../uploads/profiles/';
+        if (!file_exists($uploadDir)) {
+            mkdir($uploadDir, 0755, true);
+        }
+        
+        // Generate unique filename
+        $extension = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $filename = 'advisor_' . $advisor_id . '_' . time() . '.' . $extension;
+        $filePath = $uploadDir . $filename;
+        
+        // Move uploaded file
+        if (move_uploaded_file($file['tmp_name'], $filePath)) {
+            // Update database
+            $stmt = $pdo->prepare("UPDATE advisors SET profile_picture = ? WHERE id = ?");
+            $stmt->execute([$filePath, $advisor_id]);
+            
+            echo json_encode(['success' => true, 'filePath' => $filePath]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Failed to upload image']);
+        }
+    } catch (PDOException $e) {
+        error_log("Profile upload error: " . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'An error occurred. Please try again.']);
+    }
+    exit();
 }
 ?>
+
 
 
 <!DOCTYPE html>
@@ -95,7 +160,7 @@ try {
             <div class="sidebar-header">
                 <h3>ThesisTrack</h3>
                 <div class="college-info">College of Information and Communication Technology</div>
-                <div class="sidebar-user"><img src="../images/default-user.png" class="image-sidebar-avatar" />
+                <div class="sidebar-user"><img src="<?php echo htmlspecialchars($profile_picture); ?>" class="image-sidebar-avatar" id="sidebarAvatar" />
                 <div class="sidebar-username"><?php echo htmlspecialchars($user_name); ?></div></div>
                 <span class="role-badge">Subject Advisor</span>
             </div>
@@ -145,13 +210,11 @@ try {
                 <button class="topbar-icon" title="Notifications">
                 <i class="fas fa-bell"></i></button>
                 <div class="user-info dropdown">
-                <img
-                src="../images/default-user.png"
-                alt="User Avatar"
-                class="user-avatar"
-                id="userAvatar"
-                tabindex="0"
-                />
+                <img src="<?php echo htmlspecialchars($profile_picture); ?>" 
+                alt="User Avatar" 
+                class="user-avatar" 
+                id="userAvatar" 
+                tabindex="0" />
         <div class="dropdown-menu" id="userDropdown">
           <a href="#" class="dropdown-item">
             <i class="fas fa-cog"></i> Settings
@@ -262,6 +325,23 @@ try {
             </div>
         </main>
     </div>
+
+    <div class="profile-upload-modal" id="uploadModal">
+    <div class="profile-upload-modal-content">
+        <span class="profile-upload-close" onclick="closeUploadModal()">&times;</span>
+        <h3>Update Profile Picture</h3>
+        
+        <form id="avatarUploadForm" enctype="multipart/form-data">
+            <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+                <i class="fas fa-cloud-upload-alt"></i>
+                <p>Click to select an image</p>
+                <img id="imagePreview" class="preview-image">
+                <input type="file" id="fileInput" name="profile_picture" accept="image/*" style="display:none;" onchange="previewImage(this)">
+            </div>
+            <button type="button" class="upload-button" id="uploadBtn" onclick="uploadProfilePicture()">Upload</button>
+        </form>
+    </div>
+</div>
 
     <script src="../JS/advisor_dashboard.js"></script>
 </body>
