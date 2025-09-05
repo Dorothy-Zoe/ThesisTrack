@@ -12,15 +12,33 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'coordinator') {
     exit();
 }
 
-// Coordinator full name (optional display use)
-$user_name = $_SESSION['name'] ?? 'Coordinator'; 
+
+// ==================== V7 UPDATE 
+// In your coordinator session verification code:
+try {
+    $stmt = $pdo->prepare("SELECT id, CONCAT(first_name, ' ', last_name) AS name, profile_picture FROM coordinators WHERE id = ? AND status = 'active'");
+    $stmt->execute([$_SESSION['user_id']]);
+    $coordinator = $stmt->fetch();
+    
+    if (!$coordinator) {
+        header('Location: ../login.php');
+        exit();
+    }
+    
+    $user_name = $coordinator['name'];
+    $profile_picture = $coordinator['profile_picture'] ? '../uploads/profile_pictures/' . $coordinator['profile_picture'] : '../images/default-user.png';
+} catch (PDOException $e) {
+    error_log("Database error: " . $e->getMessage());
+    header('Location: ../login.php');
+    exit();
+}
+// =================END OF V7 UPDATE
 
 
 
 // === Handle Advisor CRUD ===
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
-
 
     switch ($_POST['action']) {
         case 'add_advisor':
@@ -247,7 +265,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['success' => false, 'message' => 'Failed to fetch advisor data.']);
             }
             exit();
-   case 'add_section':
+
+        case 'add_section':
             $advisor_id = (int)$_POST['advisor_id'];
             $section = sanitize($_POST['section']);
             $course = explode('-', $section)[0]; // Extract course from section (e.g., "BSCS" from "BSCS-3A")
@@ -299,12 +318,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// === Fetch Advisors List with Group & Student Counts ===
+// === Sorting Configuration ===
+$valid_sort_columns = [
+    'advisor_name' => 'a.last_name',
+    'email' => 'a.email',
+    'employee_id' => 'a.employee_id',
+    'assigned_section' => 'a.sections_handled',
+    'specialization' => 'a.specialization',
+    'total_groups' => 'total_groups',
+    'total_students' => 'total_students',
+    'status' => 'a.status'
+];
+
+// Get sorting parameters from URL
+$current_sort = $_GET['sort'] ?? 'advisor_name';
+$current_order = $_GET['order'] ?? 'asc';
+$search_term = $_GET['search'] ?? '';
+$current_page = $_GET['page'] ?? 1;
+
+// Validate sorting parameters
+$sort_column = $valid_sort_columns[$current_sort] ?? $valid_sort_columns['advisor_name'];
+$sort_order = strtolower($current_order) === 'desc' ? 'DESC' : 'ASC';
+
+// Function to generate sort URL
+function getSortUrl($column, $current_sort, $current_order, $search_term, $current_page) {
+    $order = ($current_sort === $column && $current_order === 'asc') ? 'desc' : 'asc';
+    return '?sort=' . $column . 
+           '&order=' . $order . 
+           '&search=' . urlencode($search_term) . 
+           '&page=' . $current_page;
+}
+
+// Function to display sort arrows
+function getSortArrows($column, $current_sort, $current_order) {
+    if ($column === $current_sort) {
+        $arrow = $current_order === 'asc' ? 'caret-up' : 'caret-down';
+        return '<i class="fas fa-'.$arrow.' active-arrow" title="Sorted"></i>';
+    }
+    return '<i class="fas fa-sort neutral-arrow" title="Click to sort"></i>';
+}
+
+// === Fetch Advisors List with Sorting ===
 try {
-        // Get all assigned sections
+    // Get all assigned sections
     $stmt = $pdo->query("SELECT section FROM advisor_sections");
     $assignedSections = $stmt->fetchAll(PDO::FETCH_COLUMN);
-    // First get all advisors with their basic info
+
+    // Get advisors with sorting applied
     $stmt = $pdo->prepare("
         SELECT 
             a.*,
@@ -315,12 +375,12 @@ try {
         LEFT JOIN student_groups sg ON a.id = sg.advisor_id
         LEFT JOIN students s ON a.id = s.advisor_id
         GROUP BY a.id
-        ORDER BY a.last_name, a.first_name
+        ORDER BY $sort_column $sort_order, a.last_name, a.first_name
     ");
     $stmt->execute();
     $advisors = $stmt->fetchAll();
 
-    // Now get all sections for each advisor
+    // Get all sections for each advisor
     $stmt = $pdo->prepare("
         SELECT advisor_id, GROUP_CONCAT(section SEPARATOR ', ') AS sections, 
                GROUP_CONCAT(course SEPARATOR ', ') AS courses
@@ -347,7 +407,7 @@ try {
 }
 
 // === Pagination ===
-$itemsPerPage = 10;
+$itemsPerPage = 5;
 $totalAdvisors = count($advisors);
 $totalPages = ceil($totalAdvisors / $itemsPerPage);
 $currentPage = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
@@ -373,7 +433,10 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
                 <h2>ThesisTrack</h2>
                 <div class="college-info">College of Information and Communication Technology</div>
                 <div class="sidebar-user">
-                    <img src="../images/default-user.png" class="sidebar-avatar" />
+                     <img src="<?php echo $profile_picture; ?>?t=<?php echo time(); ?>" 
+         class="sidebar-avatar" 
+         alt="User Avatar" 
+         id="currentProfilePicture" />
                     <div class="sidebar-username"><?php echo htmlspecialchars($user_name); ?></div>
                 </div>
                 <span class="role-badge">Research Coordinator</span>
@@ -419,8 +482,13 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
                     <button class="topbar-icon" title="Notifications">
                         <i class="fas fa-bell"></i>
                     </button>
-                    <div class="user-info dropdown">
-                        <img src="../images/default-user.png" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0" />
+                   <div class="user-info dropdown">
+                        <img src="<?php echo htmlspecialchars($profile_picture); ?>?t=<?php echo time(); ?>" 
+                            alt="User Avatar" 
+                            class="user-avatar" 
+                            id="userAvatar" 
+                            tabindex="0"
+                            onerror="this.src='../images/default-user.png'" />
                         <div class="dropdown-menu" id="userDropdown">
                             <a href="#" class="dropdown-item">
                                 <i class="fas fa-cog"></i> Settings
@@ -472,19 +540,85 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
                                 <div class="table-scroll">
                                     <table class="sections-table">
 
+
+                                    <!-- show entries -->
+                            <div class="table-controls-row">
+                                <div class="entries-selector">
+                                    <span>Show</span>
+                                    <select name="entries" onchange="this.form.submit()" class="entries-select">
+                                        <?php
+                                        $entries_options = [5, 10, 25, 50];
+                                        $selected_entries = $_GET['entries'] ?? 5;
+                                        
+                                        foreach ($entries_options as $option) {
+                                            $selected = ($option == $selected_entries) ? 'selected' : '';
+                                            echo "<option value='$option' $selected>$option</option>";
+                                        }
+                                        ?>
+                                    </select>
+                                    <span>entries</span>
+                                </div>
+
+                                <form class="modern-search" method="GET" action="">
+                                    <div class="search-container">
+                                        <i class="fas fa-search"></i>
+                                        <input type="text" name="search" placeholder="Search here..." class="search-input" 
+                                            value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
+                                        <!-- Preserve other GET parameters -->
+                                        <?php foreach ($_GET as $key => $value): ?>
+                                            <?php if ($key !== 'search' && $key !== 'page'): ?>
+                                                <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </form>
+                            </div>
+
                                     <thead>
-                                        <tr>
-                                            <th> Advisor Name</th>
-                                            <th> Email</th>
-                                            <th> Employee ID</th>
-                                            <th> Assigned Section</th>
-                                            <th> Specialization</th>
-                                            <th> Total Groups</th>
-                                            <th> Total Students</th>
-                                            <th> Status</th>
-                                            <th> Actions</th>
-                                        </tr>
-                                    </thead>
+                                <tr>
+                                <th>
+                                    <a href="<?= getSortUrl('advisor_name', $current_sort, $current_order, $search_term, $current_page) ?>">
+                                        Advisor Name <?= getSortArrows('advisor_name', $current_sort, $current_order) ?>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="<?= getSortUrl('email', $current_sort, $current_order, $search_term, $current_page) ?>">
+                                        Email <?= getSortArrows('email', $current_sort, $current_order) ?>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="<?= getSortUrl('employee_id', $current_sort, $current_order, $search_term, $current_page) ?>">
+                                        Employee ID <?= getSortArrows('employee_id', $current_sort, $current_order) ?>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="<?= getSortUrl('assigned_section', $current_sort, $current_order, $search_term, $current_page) ?>">
+                                        Assigned Section <?= getSortArrows('assigned_section', $current_sort, $current_order) ?>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="<?= getSortUrl('specialization', $current_sort, $current_order, $search_term, $current_page) ?>">
+                                        Specialization <?= getSortArrows('specialization', $current_sort, $current_order) ?>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="<?= getSortUrl('total_groups', $current_sort, $current_order, $search_term, $current_page) ?>">
+                                        Total Groups <?= getSortArrows('total_groups', $current_sort, $current_order) ?>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="<?= getSortUrl('total_students', $current_sort, $current_order, $search_term, $current_page) ?>">
+                                        Total Students <?= getSortArrows('total_students', $current_sort, $current_order) ?>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="<?= getSortUrl('status', $current_sort, $current_order, $search_term, $current_page) ?>">
+                                        Status <?= getSortArrows('status', $current_sort, $current_order) ?>
+                                    </a>
+                                </th>
+                                <th>Actions</th>
+                            </tr>
+                            </thead>
                                     <tbody>
                                         <?php foreach ($paginatedAdvisors as $advisor): ?>
 

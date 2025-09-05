@@ -562,3 +562,39 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+
+document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.querySelector('.search-input');
+    const table = document.getElementById('groupsTable');
+    const rows = table.querySelectorAll('tbody tr');
+    
+    // Function to perform search
+    function performSearch() {
+        const searchTerm = searchInput.value.toLowerCase();
+        
+        rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            let rowMatches = false;
+            
+            // Skip the first column (Group ID) and last column (Actions)
+            for (let i = 1; i < cells.length - 1; i++) {
+                const cellText = cells[i].textContent.toLowerCase();
+                if (cellText.includes(searchTerm)) {
+                    rowMatches = true;
+                    break;
+                }
+            }
+            
+            row.style.display = rowMatches ? '' : 'none';
+        });
+    }
+    
+    // Event listener for input changes
+    searchInput.addEventListener('input', performSearch);
+    
+    // If there's an initial search term, filter immediately
+    if (searchInput.value) {
+        performSearch();
+    }
+});

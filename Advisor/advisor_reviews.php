@@ -10,8 +10,37 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'advisor') {
 
 // Get the logged-in advisor's ID
 $advisor_id = $_SESSION['user_id'];
-// Get the user's name from the session
 $user_name = $_SESSION['name'] ?? 'Advisor'; // Default to 'Advisor' if name is not set
+
+$profile_picture = '../images/default-user.png'; // Default image
+
+try {
+    // Get advisor details including profile picture
+    $stmt = $pdo->prepare("SELECT first_name, last_name, profile_picture FROM advisors WHERE id = ?");
+    $stmt->execute([$advisor_id]);
+    $advisor = $stmt->fetch();
+    
+    $user_name = ($advisor['first_name'] && $advisor['last_name']) ? $advisor['first_name'] . ' ' . $advisor['last_name'] : 'Advisor';
+    
+    // Check if profile picture exists and is valid
+    if (!empty($advisor['profile_picture'])) {
+        $relative_path = $advisor['profile_picture'];
+        $absolute_path = __DIR__ . '/../' . $relative_path;
+        
+        if (file_exists($absolute_path) && is_readable($absolute_path)) {
+            $profile_picture = '../' . $relative_path;
+        } else {
+            error_log("Profile image not found: " . $absolute_path);
+        }
+    }
+
+} catch (PDOException $e) {
+    // Log the error and use default values
+    error_log("Database error fetching advisor details: " . $e->getMessage());
+    $user_name = 'Advisor';
+    $profile_picture = '../images/default-user.png';
+}
+
 
 // Fetch pending chapters for this advisor
 $pending_chapters = [];
@@ -61,7 +90,7 @@ try {
             <div class="sidebar-header">
                 <h3>ThesisTrack</h3>
                 <div class="college-info">College of Information and Communication Technology</div>
-                <div class="sidebar-user"><img src="../images/default-user.png" class="sidebar-avatar" />
+                <div class="sidebar-user"><img src="<?php echo htmlspecialchars($profile_picture); ?>" class="image-sidebar-avatar" id="sidebarAvatar" />
                 <div class="sidebar-username"><?php echo htmlspecialchars($user_name); ?></div></div>
                 <span class="role-badge">Subject Advisor</span>
             </div>
@@ -115,13 +144,7 @@ try {
                 <button class="topbar-icon" title="Notifications">
                 <i class="fas fa-bell"></i></button>
                 <div class="user-info dropdown">
-                <img
-                src="../images/default-user.png"
-                alt="User Avatar"
-                class="user-avatar"
-                id="userAvatar"
-                tabindex="0"
-                />
+                <img src="<?php echo htmlspecialchars($profile_picture); ?>" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0" />
         <div class="dropdown-menu" id="userDropdown">
           <a href="#" class="dropdown-item">
             <i class="fas fa-cog"></i> Settings
