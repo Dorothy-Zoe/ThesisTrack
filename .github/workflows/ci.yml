@@ -14,6 +14,7 @@ jobs:
         image: mysql:8.0
         env:
           MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: thesis_track_test
         ports:
           - 3306:3306
         options: >-
@@ -36,21 +37,16 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
 
-      - name: Wait for MySQL to be ready
+      - name: Wait for MySQL
         run: |
+          echo "Waiting for MySQL to be ready..."
           for i in {30..0}; do
-            if mysqladmin ping -h127.0.0.1 -uroot -proot --silent; then
-              break
-            fi
-            echo 'Waiting for MySQL...'
+            mysqladmin ping -h 127.0.0.1 -uroot -proot >/dev/null 2>&1 && break
             sleep 1
           done
 
-      - name: Setup test database
-        run: |
-          mysql -h 127.0.0.1 -uroot -proot -e "DROP DATABASE IF EXISTS thesis_track_test;"
-          mysql -h 127.0.0.1 -uroot -proot -e "CREATE DATABASE thesis_track_test CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
-          mysql -h 127.0.0.1 -uroot -proot thesis_track_test < db/thesis_track_test.sql
+      - name: Import test database
+        run: mysql -h 127.0.0.1 -uroot -proot thesis_track_test < db/thesis_track_test.sql
 
       - name: Run PHPUnit tests
         run: php vendor/bin/phpunit --configuration phpunit.xml
