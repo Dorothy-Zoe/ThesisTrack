@@ -10,7 +10,14 @@ class LoginServiceTest extends TestCase
     protected function setUp(): void
     {
         // Get PDO instance directly from db.php
-        $this->pdo = require __DIR__ . '/../db/db.php';
+        $pdo = require __DIR__ . '/../db/db.php';
+        
+        // Check if connection was successful
+        if ($pdo === null) {
+            $this->markTestSkipped('Database connection failed');
+        }
+        
+        $this->pdo = $pdo;
 
         // Start a transaction so changes rollback after each test
         $this->pdo->beginTransaction();
@@ -21,14 +28,19 @@ class LoginServiceTest extends TestCase
 
     protected function tearDown(): void
     {
-        // Rollback changes
-        if ($this->pdo->inTransaction()) {
+        // Rollback changes if transaction is active
+        if (isset($this->pdo) && $this->pdo->inTransaction()) {
             $this->pdo->rollBack();
         }
     }
 
     public function testAdvisorLoginSuccess()
     {
+        // Skip test if no database connection
+        if (!isset($this->pdo)) {
+            $this->markTestSkipped('No database connection');
+        }
+
         // Insert test advisor
         $hashed = password_hash('password123', PASSWORD_DEFAULT);
         $this->pdo->exec("INSERT INTO advisors (first_name,last_name,email,password) VALUES ('John','Doe','advisor@test.com','$hashed')");
@@ -40,6 +52,10 @@ class LoginServiceTest extends TestCase
 
     public function testAdvisorLoginWrongPassword()
     {
+        if (!isset($this->pdo)) {
+            $this->markTestSkipped('No database connection');
+        }
+
         $hashed = password_hash('password123', PASSWORD_DEFAULT);
         $this->pdo->exec("INSERT INTO advisors (first_name,last_name,email,password) VALUES ('Jane','Doe','advisor2@test.com','$hashed')");
 
@@ -49,6 +65,10 @@ class LoginServiceTest extends TestCase
 
     public function testStudentLoginSuccess()
     {
+        if (!isset($this->pdo)) {
+            $this->markTestSkipped('No database connection');
+        }
+
         $hashed = password_hash('studentpass', PASSWORD_DEFAULT);
         $this->pdo->exec("INSERT INTO students (first_name,last_name,email,password) VALUES ('Alice','Smith','student@test.com','$hashed')");
 
@@ -59,6 +79,10 @@ class LoginServiceTest extends TestCase
 
     public function testCoordinatorLoginSuccess()
     {
+        if (!isset($this->pdo)) {
+            $this->markTestSkipped('No database connection');
+        }
+
         $hashed = password_hash('coordpass', PASSWORD_DEFAULT);
         $this->pdo->exec("INSERT INTO coordinators (first_name,last_name,email,password) VALUES ('Bob','Jones','coord@test.com','$hashed')");
 

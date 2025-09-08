@@ -28,8 +28,17 @@ try {
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
     $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
 } catch (PDOException $e) {
-    error_log("Database connection failed: " . $e->getMessage());
-    die("Database connection failed. Please check DB settings.");
+    // More detailed error message for debugging
+    $errorMsg = "Database connection failed: " . $e->getMessage() . 
+                " | Host: $host | DB: $dbname | User: $username";
+    error_log($errorMsg);
+    
+    // For CI environment, throw exception instead of dying to see the error
+    if ($isCI) {
+        throw new RuntimeException($errorMsg);
+    } else {
+        die("Database connection failed. Please check DB settings.");
+    }
 }
 
 // ------------------
