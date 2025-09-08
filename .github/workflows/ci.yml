@@ -11,17 +11,16 @@ jobs:
     runs-on: ubuntu-latest
     services:
       mysql:
-        image: mysql:8
+        image: mysql:8.0
         env:
           MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: thesis_track
+        ports:
+          - 3306:3306
         options: >-
           --health-cmd="mysqladmin ping --silent"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=3
-        ports:
-          - 3306:3306
 
     steps:
       - name: Checkout repository
@@ -32,17 +31,32 @@ jobs:
         with:
           php-version: '8.2'
           extensions: mbstring, pdo_mysql
+          coverage: none
 
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
 
-      - name: Import database
-        run: mysql -h 127.0.0.1 -uroot -proot thesis_track < db/thesis_track.sql
+      - name: Wait for MySQL
+        run: |
+          echo "Waiting for MySQL to be ready..."
+          for i in {30..0}; do
+            if mysql -h 127.0.0.1 -uroot -proot -e "SELECT 1;" &> /dev/null; then
+              break
+            fi
+            echo "Waiting..."
+            sleep 1
+          done
+
+      - name: Set up test database
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot -e "DROP DATABASE IF EXISTS thesis_track_test;"
+          mysql -h 127.0.0.1 -uroot -proot -e "CREATE DATABASE thesis_track_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+          mysql -h 127.0.0.1 -uroot -proot thesis_track_test < db/thesis_track_test.sql
 
       - name: Run PHPUnit tests
         env:
           DB_HOST: 127.0.0.1
-          DB_NAME: thesis_track
+          DB_NAME: thesis_track_test
           DB_USER: root
           DB_PASS: root
         run: php vendor/bin/phpunit --configuration phpunit.xml
