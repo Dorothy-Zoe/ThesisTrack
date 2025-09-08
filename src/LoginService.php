@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/../db/db.php';
+// Note: db.php requirement removed - PDO is passed via constructor
 
 class LoginService
 {

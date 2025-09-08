@@ -15,6 +15,7 @@ class LoginServiceTest extends TestCase
         // Start a transaction so changes rollback after each test
         $this->pdo->beginTransaction();
 
+        // Pass the PDO instance to LoginService constructor
         $this->loginService = new LoginService($this->pdo);
     }
 

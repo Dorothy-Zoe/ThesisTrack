@@ -1,4 +1,10 @@
 <?php
+// Prevent multiple inclusions
+if (defined('DB_INCLUDED')) {
+    return $pdo ?? null;
+}
+define('DB_INCLUDED', true);
+
 // Detect if running in CI / PHPUnit
 $isCI = getenv('CI') === 'true' || getenv('PHPUNIT') === '1';
 
@@ -29,9 +35,11 @@ try {
 // ------------------
 // Helper Functions
 // ------------------
-function sanitize($data) {
-    if ($data === null) return null;
-    return htmlspecialchars(stripslashes(trim($data)), ENT_QUOTES, 'UTF-8');
+if (!function_exists('sanitize')) {
+    function sanitize($data) {
+        if ($data === null) return null;
+        return htmlspecialchars(stripslashes(trim($data)), ENT_QUOTES, 'UTF-8');
+    }
 }
 
 // Return the PDO instance
