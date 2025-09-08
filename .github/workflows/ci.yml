@@ -37,8 +37,20 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
 
+      - name: Wait for MySQL
+        run: |
+          echo "Waiting for MySQL to be ready..."
+          until mysqladmin ping -h mysql -uroot -proot --silent; do
+            sleep 2
+          done
+
       - name: Import test database
-        run: mysql -h 127.0.0.1 -uroot -proot thesis_track_test < db/thesis_track_test.sql
+        run: mysql -h mysql -uroot -proot thesis_track_test < db/thesis_track_test.sql
 
       - name: Run PHPUnit tests
+        env:
+          DB_HOST: mysql
+          DB_NAME: thesis_track_test
+          DB_USER: root
+          DB_PASS: root
         run: php vendor/bin/phpunit --configuration phpunit.xml
