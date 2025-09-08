@@ -1,65 +1,62 @@
 <?php
-// src/LoginService.php
-require_once __DIR__ . '/../db/db.php';
-
-
-class LoginService {
+class LoginService
+{
     private $pdo;
 
-    public function __construct($pdo) {
+    public function __construct($pdo)
+    {
         $this->pdo = $pdo;
     }
 
-    public function loginAdvisor($email, $password) {
-        $stmt = $this->pdo->prepare("SELECT * FROM advisors WHERE email = ?");
-        $stmt->execute([$email]);
-        $advisor = $stmt->fetch();
+    /**
+     * Login user by role
+     *
+     * @param string $email
+     * @param string $password
+     * @param string $role (advisor, student, coordinator)
+     * @return array ['success' => bool, 'user' => array|null, 'message' => string|null]
+     */
+    public function login($email, $password, $role)
+    {
+        $table = '';
+        $idField = '';
+        switch ($role) {
+            case 'advisor':
+                $table = 'advisors';
+                $idField = 'id';
+                break;
+            case 'student':
+                $table = 'students';
+                $idField = 'id';
+                break;
+            case 'coordinator':
+                $table = 'coordinators';
+                $idField = 'id';
+                break;
+            default:
+                return ['success' => false, 'message' => 'Invalid role'];
+        }
 
-        if (!$advisor) return "No user found";
-        if (!password_verify($password, $advisor['password'])) return "Incorrect password";
+        try {
+            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE email = ?");
+            $stmt->execute([$email]);
+            $user = $stmt->fetch();
 
-        return [
-            "id" => $advisor['id'],
-            "role" => "advisor",
-            "name" => $advisor['first_name'] . " " . $advisor['last_name'],
-            "email" => $advisor['email'],
-            "requires_password_change" => $advisor['requires_password_change']
-        ];
-    }
+            if (!$user) {
+                return ['success' => false, 'message' => 'No user found.'];
+            }
 
-    public function loginStudent($email, $password) {
-        $stmt = $this->pdo->prepare("SELECT * FROM students WHERE email = ?");
-        $stmt->execute([$email]);
-        $student = $stmt->fetch();
+            if (!password_verify($password, $user['password'])) {
+                return ['success' => false, 'message' => 'Incorrect password.'];
+            }
 
-        if (!$student) return "No user found";
-        if (!password_verify($password, $student['password'])) return "Incorrect password";
+            // Optional: update last login for advisors, students, coordinators
+            $updateStmt = $this->pdo->prepare("UPDATE $table SET last_login = NOW() WHERE $idField = ?");
+            $updateStmt->execute([$user[$idField]]);
 
-        return [
-            "id" => $student['id'],
-            "role" => "student",
-            "name" => $student['first_name'] . " " . $student['last_name'],
-            "email" => $student['email'],
-            "course" => $student['course'],
-            "section" => $student['section'],
-            "year_level" => $student['year_level'],
-            "requires_password_change" => $student['requires_password_change']
-        ];
-    }
-
-    public function loginCoordinator($email, $password) {
-        $stmt = $this->pdo->prepare("SELECT * FROM coordinators WHERE email = ?");
-        $stmt->execute([$email]);
-        $coordinator = $stmt->fetch();
-
-        if (!$coordinator) return "No user found";
-        if (!password_verify($password, $coordinator['password'])) return "Incorrect password";
-
-        return [
-            "id" => $coordinator['id'],
-            "role" => "coordinator",
-            "name" => $coordinator['first_name'] . " " . $coordinator['last_name'],
-            "email" => $coordinator['email']
-        ];
+            return ['success' => true, 'user' => $user];
+        } catch (PDOException $e) {
+            return ['success' => false, 'message' => 'Login failed. Please try again later.'];
+        }
     }
 }

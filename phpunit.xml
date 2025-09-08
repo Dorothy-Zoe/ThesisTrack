@@ -1,4 +1,3 @@
-<?xml version="1.0" encoding="UTF-8"?>
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd"
          bootstrap="vendor/autoload.php"
@@ -12,10 +11,10 @@
     </testsuites>
 
     <php>
-        <!-- Database environment variables -->
+        <!-- Test database environment variables -->
         <env name="DB_HOST" value="127.0.0.1"/>
-        <env name="DB_NAME" value="thesis_track"/>
+        <env name="DB_NAME" value="thesis_track_test"/>
         <env name="DB_USER" value="root"/>
-        <env name="DB_PASS" value=""/>
+        <env name="DB_PASS" value="root"/>
     </php>
 </phpunit>
