@@ -38,14 +38,12 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
 
+      - name: Wait for MySQL
+        run: sleep 15
+
       - name: Import database schema
         run: |
-          mysql -h 127.0.0.1 -uroot -proot thesis_track < thesis_track.sql
+          mysql -h 127.0.0.1 -uroot -proot thesis_track < db/thesis_track.sql
 
       - name: Run PHPUnit tests
-        env:
-          DB_HOST: 127.0.0.1
-          DB_NAME: thesis_track
-          DB_USER: root
-          DB_PASS: root
         run: php vendor/bin/phpunit --configuration phpunit.xml
