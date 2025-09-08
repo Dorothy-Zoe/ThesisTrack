@@ -9,20 +9,19 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
-
     services:
       mysql:
-        image: mysql:8.0
+        image: mysql:8
         env:
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: thesis_track
-        ports:
-          - 3306:3306
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-cmd="mysqladmin ping --silent"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=3
+        ports:
+          - 3306:3306
 
     steps:
       - name: Checkout repository
@@ -33,17 +32,17 @@ jobs:
         with:
           php-version: '8.2'
           extensions: mbstring, pdo_mysql
-          coverage: none
 
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
 
-      - name: Wait for MySQL
-        run: sleep 15
-
-      - name: Import database schema
-        run: |
-          mysql -h 127.0.0.1 -uroot -proot thesis_track < db/thesis_track.sql
+      - name: Import database
+        run: mysql -h 127.0.0.1 -uroot -proot thesis_track < db/thesis_track.sql
 
       - name: Run PHPUnit tests
+        env:
+          DB_HOST: 127.0.0.1
+          DB_NAME: thesis_track
+          DB_USER: root
+          DB_PASS: root
         run: php vendor/bin/phpunit --configuration phpunit.xml
