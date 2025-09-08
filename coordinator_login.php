@@ -5,7 +5,7 @@ require_once 'db/db.php';
 $error = '';
 $success = '';
 
-// ✅ Corrected role check
+// ✅ Redirect if already logged in as coordinator
 if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'coordinator') {
     header('Location: Coordinator/coordinator_dashboard.php');
     exit();
@@ -19,7 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Please fill in all fields.';
     } else {
         try {
-            // Query from `coordinators` table
+            // ✅ Query from `coordinators` table
             $stmt = $pdo->prepare("SELECT * FROM coordinators WHERE email = ?");
             $stmt->execute([$email]);
             $coordinator = $stmt->fetch();
@@ -27,19 +27,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$coordinator) {
                 $error = 'No user found with that email.';
             } else {
-
-                if ($password === $coordinator['password']) {
+                // ✅ Verify hashed password
+                if (password_verify($password, $coordinator['password'])) {
                     // ✅ Set session variables
                     $_SESSION['user_id'] = $coordinator['id'];
-                    $_SESSION['role'] = 'coordinator'; // consistent role
+                    $_SESSION['role'] = 'coordinator'; 
                     $_SESSION['coordinator_id'] = $coordinator['coordinator_id'];
                     $_SESSION['name'] = $coordinator['first_name'] . ' ' . $coordinator['last_name'];
                     $_SESSION['email'] = $coordinator['email'];
-                    $_SESSION['profile_picture'] = $coordinatorr['profile_picture'];
+                    $_SESSION['profile_picture'] = $coordinator['profile_picture'];
 
                     // ✅ Update last login
                     $updateStmt = $pdo->prepare("UPDATE coordinators SET last_login = NOW() WHERE id = ?");
-                    $updateStmt->execute([$coordinatorr['id']]);
+                    $updateStmt->execute([$coordinator['id']]);
 
                     // ✅ Redirect to dashboard
                     header('Location: Coordinator/coordinator_dashboard.php');
@@ -68,7 +68,6 @@ if (isset($_GET['success']) && $_GET['success'] === 'logout') {
     <script src="https://kit.fontawesome.com/4ef2a0fa98.js" crossorigin="anonymous"></script>
     <link rel="stylesheet" href="CSS/login.css">
     <title>Login - ThesisTrack</title>
-    
 </head>
 <body>
     <div class="login-container">
@@ -108,11 +107,13 @@ if (isset($_GET['success']) && $_GET['success'] === 'logout') {
         </form>
 
         <div class="demo-accounts">
-            <!-- <h4><i class="fas fa-key"></i> Demo Accounts</h4>
-
+            <!-- Demo accounts can be enabled for testing -->
+            <!-- 
+            <h4><i class="fas fa-key"></i> Demo Accounts</h4>
             <div class="demo-account" onclick="fillCredentials('coordinator@cict.edu', 'coordinator123')">
                 <strong>Coordinator:</strong> coordinator@cict.edu / coordinator123
-            </div> -->
+            </div>
+            -->
             <p style="margin-top: 1rem; font-size: 0.9rem; color: #666;">
                 <strong>Note:</strong> Professor and Student accounts are now created through the system by the Coordinator and Professors respectively.
             </p>
