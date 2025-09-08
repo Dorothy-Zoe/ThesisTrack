@@ -46,13 +46,48 @@ jobs:
           done
           # Additional delay to ensure MySQL is fully ready
           sleep 3
+          # Test the connection
+          mysql -h 127.0.0.1 -uroot -proot -e "SHOW DATABASES;"
 
-      - name: Import test database
-        env:
-          MYSQL_PWD: root
+      - name: Create test database
         run: |
-          mysql -h 127.0.0.1 -uroot -e "CREATE DATABASE IF NOT EXISTS thesis_track_test;"
-          mysql -h 127.0.0.1 -uroot thesis_track_test < db/thesis_track_test.sql
+          mysql -h 127.0.0.1 -uroot -proot -e "CREATE DATABASE IF NOT EXISTS thesis_track_test;"
+          mysql -h 127.0.0.1 -uroot -proot -e "SHOW DATABASES;"
+
+      - name: Import test database schema
+        run: |
+          if [ -f "db/thesis_track_test.sql" ]; then
+            mysql -h 127.0.0.1 -uroot -proot thesis_track_test < db/thesis_track_test.sql
+          else
+            echo "No test SQL file found, creating basic tables..."
+            mysql -h 127.0.0.1 -uroot -proot thesis_track_test -e "
+              CREATE TABLE IF NOT EXISTS advisors (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                first_name VARCHAR(50),
+                last_name VARCHAR(50),
+                email VARCHAR(100),
+                password VARCHAR(255)
+              );
+              CREATE TABLE IF NOT EXISTS students (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                first_name VARCHAR(50),
+                last_name VARCHAR(50),
+                email VARCHAR(100),
+                password VARCHAR(255)
+              );
+              CREATE TABLE IF NOT EXISTS coordinators (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                first_name VARCHAR(50),
+                last_name VARCHAR(50),
+                email VARCHAR(100),
+                password VARCHAR(255)
+              );
+            "
+          fi
+
+      - name: Verify database tables
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot thesis_track_test -e "SHOW TABLES;"
 
       - name: Run PHPUnit tests
-        run: php vendor/bin/phpunit --configuration phpunit.xml
+        run: php vendor/bin/phpunit --configuration phpunit.xml --verbose
