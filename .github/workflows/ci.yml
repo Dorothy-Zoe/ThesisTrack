@@ -90,4 +90,4 @@ jobs:
           mysql -h 127.0.0.1 -uroot -proot thesis_track_test -e "SHOW TABLES;"
 
       - name: Run PHPUnit tests
-        run: php vendor/bin/phpunit --configuration phpunit.xml --verbose
+        run: php vendor/bin/phpunit --configuration phpunit.xml
