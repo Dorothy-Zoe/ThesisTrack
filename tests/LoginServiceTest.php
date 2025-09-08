@@ -1,7 +1,6 @@
 <?php
 use PHPUnit\Framework\TestCase;
 require_once __DIR__ . '/../src/LoginService.php';
-require_once __DIR__ . '/../db/db.php';
 
 class LoginServiceTest extends TestCase
 {
@@ -10,8 +9,8 @@ class LoginServiceTest extends TestCase
 
     protected function setUp(): void
     {
-        global $pdo;
-        $this->pdo = $pdo;
+        // Get PDO instance directly from db.php
+        $this->pdo = require __DIR__ . '/../db/db.php';
 
         // Start a transaction so changes rollback after each test
         $this->pdo->beginTransaction();
@@ -22,7 +21,9 @@ class LoginServiceTest extends TestCase
     protected function tearDown(): void
     {
         // Rollback changes
-        $this->pdo->rollBack();
+        if ($this->pdo->inTransaction()) {
+            $this->pdo->rollBack();
+        }
     }
 
     public function testAdvisorLoginSuccess()

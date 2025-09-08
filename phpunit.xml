@@ -8,6 +8,8 @@
         </testsuite>
     </testsuites>
     <php>
+        <env name="CI" value="true"/>
+        <env name="PHPUNIT" value="1"/>
         <env name="DB_HOST" value="127.0.0.1"/>
         <env name="DB_NAME" value="thesis_track_test"/>
         <env name="DB_USER" value="root"/>
