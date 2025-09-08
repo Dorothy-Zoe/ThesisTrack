@@ -1,62 +1,46 @@
 <?php
+require_once __DIR__ . '/../db/db.php';
+
 class LoginService
 {
-    private $pdo;
+    private PDO $pdo;
 
-    public function __construct($pdo)
+    public function __construct(PDO $pdo)
     {
         $this->pdo = $pdo;
     }
 
-    /**
-     * Login user by role
-     *
-     * @param string $email
-     * @param string $password
-     * @param string $role (advisor, student, coordinator)
-     * @return array ['success' => bool, 'user' => array|null, 'message' => string|null]
-     */
-    public function login($email, $password, $role)
+    public function loginAdvisor(string $email, string $password)
     {
-        $table = '';
-        $idField = '';
-        switch ($role) {
-            case 'advisor':
-                $table = 'advisors';
-                $idField = 'id';
-                break;
-            case 'student':
-                $table = 'students';
-                $idField = 'id';
-                break;
-            case 'coordinator':
-                $table = 'coordinators';
-                $idField = 'id';
-                break;
-            default:
-                return ['success' => false, 'message' => 'Invalid role'];
+        $stmt = $this->pdo->prepare("SELECT * FROM advisors WHERE email = ?");
+        $stmt->execute([$email]);
+        $advisor = $stmt->fetch();
+        if ($advisor && password_verify($password, $advisor['password'])) {
+            return $advisor;
         }
+        return false;
+    }
 
-        try {
-            $stmt = $this->pdo->prepare("SELECT * FROM $table WHERE email = ?");
-            $stmt->execute([$email]);
-            $user = $stmt->fetch();
-
-            if (!$user) {
-                return ['success' => false, 'message' => 'No user found.'];
-            }
-
-            if (!password_verify($password, $user['password'])) {
-                return ['success' => false, 'message' => 'Incorrect password.'];
-            }
-
-            // Optional: update last login for advisors, students, coordinators
-            $updateStmt = $this->pdo->prepare("UPDATE $table SET last_login = NOW() WHERE $idField = ?");
-            $updateStmt->execute([$user[$idField]]);
-
-            return ['success' => true, 'user' => $user];
-        } catch (PDOException $e) {
-            return ['success' => false, 'message' => 'Login failed. Please try again later.'];
+    public function loginStudent(string $email, string $password)
+    {
+        $stmt = $this->pdo->prepare("SELECT * FROM students WHERE email = ?");
+        $stmt->execute([$email]);
+        $student = $stmt->fetch();
+        if ($student && password_verify($password, $student['password'])) {
+            return $student;
         }
+        return false;
+    }
+
+    public function loginCoordinator(string $email, string $password)
+    {
+        $stmt = $this->pdo->prepare("SELECT * FROM coordinators WHERE email = ?");
+        $stmt->execute([$email]);
+        $coordinator = $stmt->fetch();
+        if ($coordinator && password_verify($password, $coordinator['password'])) {
+            return $coordinator;
+        }
+        return false;
     }
 }
+?>
