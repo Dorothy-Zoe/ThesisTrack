@@ -1,9 +1,9 @@
 <?php
 // Database configuration
-$host = 'localhost';
-$dbname = 'thesis_track';
-$username = 'root';
-$password = '';
+$host = getenv('DB_HOST') ?: '127.0.0.1';
+$dbname = getenv('DB_NAME') ?: 'thesis_track';
+$username = getenv('DB_USER') ?: 'root';
+$password = getenv('DB_PASS') ?: '';
 
 // Create connection
 $conn = new mysqli($host, $username, $password, $dbname);
