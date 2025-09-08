@@ -559,19 +559,7 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
                                     <span>entries</span>
                                 </div>
 
-                                <form class="modern-search" method="GET" action="">
-                                    <div class="search-container">
-                                        <i class="fas fa-search"></i>
-                                        <input type="text" name="search" placeholder="Search here..." class="search-input" 
-                                            value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
-                                        <!-- Preserve other GET parameters -->
-                                        <?php foreach ($_GET as $key => $value): ?>
-                                            <?php if ($key !== 'search' && $key !== 'page'): ?>
-                                                <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
-                                            <?php endif; ?>
-                                        <?php endforeach; ?>
-                                    </div>
-                                </form>
+                                
                             </div>
 
                                     <thead>
