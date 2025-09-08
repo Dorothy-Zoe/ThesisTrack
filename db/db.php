@@ -1,8 +1,13 @@
 <?php
-// Prevent multiple inclusions
+// Prevent multiple inclusions but always return a valid PDO instance
 if (defined('DB_INCLUDED')) {
-    return $pdo ?? null;
+    // Return the existing PDO instance if it exists
+    if (isset($GLOBALS['DB_PDO_INSTANCE']) && $GLOBALS['DB_PDO_INSTANCE'] instanceof PDO) {
+        return $GLOBALS['DB_PDO_INSTANCE'];
+    }
+    // Otherwise create a new connection
 }
+
 define('DB_INCLUDED', true);
 
 // Detect if running in CI / PHPUnit
@@ -27,13 +32,15 @@ try {
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
     $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
+    
+    // Store the instance globally for subsequent calls
+    $GLOBALS['DB_PDO_INSTANCE'] = $pdo;
+    
 } catch (PDOException $e) {
-    // More detailed error message for debugging
     $errorMsg = "Database connection failed: " . $e->getMessage() . 
                 " | Host: $host | DB: $dbname | User: $username";
     error_log($errorMsg);
     
-    // For CI environment, throw exception instead of dying to see the error
     if ($isCI) {
         throw new RuntimeException($errorMsg);
     } else {
