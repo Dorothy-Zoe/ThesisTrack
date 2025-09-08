@@ -7,10 +7,36 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'student') {
     exit();
 }
 
-$user_id = $_SESSION['user_id'];
-$user_name = $_SESSION['name'] ?? 'Student';
-$user_section = null;
 
+$user_id = $_SESSION['user_id'];
+$user_name = $_SESSION['name'];
+
+// In your dashboard PHP code where you fetch the profile picture:
+$profile_picture = '../images/default-user.png'; // Default image
+
+try {
+    // Get student's profile picture path
+    $stmt = $pdo->prepare("SELECT profile_picture FROM students WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $student = $stmt->fetch();
+    
+    // Verify and set profile picture if exists
+    if (!empty($student['profile_picture'])) {
+        $relative_path = $student['profile_picture'];
+        $absolute_path = dirname(__DIR__) . '/' . $relative_path;
+        
+        // Check if file exists and is readable
+        if (file_exists($absolute_path) && is_readable($absolute_path)) {
+            $profile_picture = '../' . $relative_path;
+        }
+    }
+} catch (PDOException $e) {
+    error_log("Database error fetching profile picture: " . $e->getMessage());
+}
+
+
+
+$user_section = null;
 $userGroup = null;
 try {
     $groupQuery = $pdo->prepare("
@@ -78,6 +104,10 @@ foreach ($chapters as $chapter) {
     }
 }
 $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapters) * 100 : 0;
+
+
+    
+
 ?>
 
 
@@ -100,7 +130,11 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
             <div class="sidebar-header">
                 <h3>ThesisTrack</h3>
                 <div class="college-info">College of Information and Communication Technology</div>
-                <div class="sidebar-user"><img src="../images/default-user.png" class="sidebar-avatar" />
+               <div class="sidebar-user" onclick="openUploadModal()" style="cursor: pointer;">
+      <img src="<?php echo htmlspecialchars($profile_picture); ?>" 
+         class="sidebar-avatar" 
+         alt="Profile Picture"
+         id="sidebarProfileImage" />
                 <div class="sidebar-username"><?php echo htmlspecialchars($user_name); ?></div></div>
                 <span class="role-badge">Student</span>
             </div>
@@ -145,13 +179,12 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
                 <button class="topbar-icon" title="Notifications">
                 <i class="fas fa-bell"></i></button>
                 <div class="user-info dropdown">
-                <img
-                src="../images/default-user.png"
-                alt="User Avatar"
-                class="user-avatar"
-                id="userAvatar"
-                tabindex="0"
-                />
+               <!-- In the header -->
+<img src="<?php echo htmlspecialchars($profile_picture); ?>"
+     alt="User Avatar"
+     class="user-avatar"
+     id="userAvatar"
+     tabindex="0" />
         <div class="dropdown-menu" id="userDropdown">
           <a href="#" class="dropdown-item">
             <i class="fas fa-cog"></i> Settings
@@ -270,13 +303,27 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
                 <?php endif; ?>
             </div>
 
-            
-
-            
-
-           
         </main>
     </div>
+
+     <!-- Upload Modal (add this at the bottom of your page) -->
+<div class="profile-upload-modal" id="uploadModal">
+    <div class="profile-upload-modal-content">
+        <span class="profile-upload-close" onclick="closeUploadModal()">&times;</span>
+        <h3>Update Profile Picture</h3>
+        
+        <form id="avatarUploadForm" enctype="multipart/form-data">
+            <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+                <i class="fas fa-cloud-upload-alt"></i>
+                <p>Click to select an image</p>
+                <img id="imagePreview" class="preview-image">
+                <input type="file" id="fileInput" name="profile_picture" accept="image/*" style="display:none;" onchange="previewImage(this)">
+            </div>
+            <button type="button" class="upload-button" id="uploadBtn" onclick="uploadProfilePicture()">Upload</button>
+        </form>
+    </div>
+</div>
+   
 
         <script src="../JS/student_dashboard.js"></script>
 </body>

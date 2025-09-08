@@ -12,68 +12,103 @@ if (!isset($_SESSION['user_id'])) {
 $advisor_id = $_SESSION['user_id'];
 $user_name = $_SESSION['name'] ?? 'Advisor';
 
-// Fetch all groups assigned to this advisor with course from student_groups
-$groups_query = "SELECT g.id, g.title, g.section, g.status, sg.course, sg.thesis_title
-                 FROM groups g
-                 LEFT JOIN student_groups sg ON sg.group_id = g.id
-                 WHERE g.advisor_id = ?
-                 ORDER BY g.section, g.title";
-$stmt = $conn->prepare($groups_query);
-$stmt->bind_param("i", $advisor_id);
-$stmt->execute();
-$groups_result = $stmt->get_result();
+$profile_picture = '../images/default-user.png'; // Default image
 
-
-// We'll store all group data in this array
-$groups_data = [];
-
-while ($group = $groups_result->fetch_assoc()) {
-    $group_id = $group['id'];
+try {
+    // Get advisor details including profile picture
+    $stmt = $pdo->prepare("SELECT first_name, last_name, profile_picture FROM advisors WHERE id = ?");
+    $stmt->execute([$advisor_id]);
+    $advisor = $stmt->fetch();
     
-    // Get members for this group
-    $members_query = "SELECT s.id, s.first_name, s.last_name, gm.role_in_group
-                      FROM group_members gm
-                      JOIN students s ON gm.student_id = s.id
-                      WHERE gm.group_id = ?
-                      ORDER BY 
-                    CASE gm.role_in_group
-                      WHEN 'leader' THEN 0
-                      ELSE 1
-                    END,
-                    s.last_name";
-    $stmt_m = $conn->prepare($members_query);
-    $stmt_m->bind_param("i", $group_id);
-    $stmt_m->execute();
-    $members_result = $stmt_m->get_result();
+    $user_name = ($advisor['first_name'] && $advisor['last_name']) ? $advisor['first_name'] . ' ' . $advisor['last_name'] : 'Advisor';
     
-    $members = [];
-    while ($member = $members_result->fetch_assoc()) {
-        $members[] = $member;
+    // Check if profile picture exists and is valid
+    if (!empty($advisor['profile_picture'])) {
+        $relative_path = $advisor['profile_picture'];
+        $absolute_path = __DIR__ . '/../' . $relative_path;
+        
+        if (file_exists($absolute_path) && is_readable($absolute_path)) {
+            $profile_picture = '../' . $relative_path;
+        } else {
+            error_log("Profile image not found: " . $absolute_path);
+        }
     }
-    
-    // Get chapters for this group
-    $chapters_query = "SELECT id, chapter_number, chapter_name, status, 
-                       (SELECT COUNT(*) FROM chapter_comments 
-                        WHERE chapter_id = chapters.id AND is_resolved = 0) as unresolved_comments
-                       FROM chapters 
-                       WHERE group_id = ?
-                       ORDER BY chapter_number";
-    $stmt_c = $conn->prepare($chapters_query);
-    $stmt_c->bind_param("i", $group_id);
-    $stmt_c->execute();
-    $chapters_result = $stmt_c->get_result();
-    
-    $chapters = [];
-    while ($chapter = $chapters_result->fetch_assoc()) {
-        $chapters[] = $chapter;
+
+
+} catch (PDOException $e) {
+    // Log the error and use default values
+    error_log("Database error fetching advisor details: " . $e->getMessage());
+    $user_name = 'Advisor';
+    $profile_picture = '../images/default-user.png';
+}
+
+try {
+    // Fetch all groups assigned to this advisor with course from student_groups
+    $groups_query = "SELECT g.id, g.title, g.section, g.status, sg.course, sg.thesis_title
+                    FROM groups g
+                    LEFT JOIN student_groups sg ON sg.group_id = g.id
+                    WHERE g.advisor_id = ?
+                    ORDER BY g.section, g.title";
+    $stmt = $conn->prepare($groups_query);
+    $stmt->bind_param("i", $advisor_id);
+    $stmt->execute();
+    $groups_result = $stmt->get_result();
+
+    // We'll store all group data in this array
+    $groups_data = [];
+
+    while ($group = $groups_result->fetch_assoc()) {
+        $group_id = $group['id'];
+        
+        // Get members for this group
+        $members_query = "SELECT s.id, s.first_name, s.last_name, gm.role_in_group
+                        FROM group_members gm
+                        JOIN students s ON gm.student_id = s.id
+                        WHERE gm.group_id = ?
+                        ORDER BY 
+                        CASE gm.role_in_group
+                            WHEN 'leader' THEN 0
+                            ELSE 1
+                        END,
+                        s.last_name";
+        $stmt_m = $conn->prepare($members_query);
+        $stmt_m->bind_param("i", $group_id);
+        $stmt_m->execute();
+        $members_result = $stmt_m->get_result();
+        
+        $members = [];
+        while ($member = $members_result->fetch_assoc()) {
+            $members[] = $member;
+        }
+        
+        // Get chapters for this group
+        $chapters_query = "SELECT id, chapter_number, chapter_name, status, 
+                        (SELECT COUNT(*) FROM chapter_comments 
+                            WHERE chapter_id = chapters.id AND is_resolved = 0) as unresolved_comments
+                        FROM chapters 
+                        WHERE group_id = ?
+                        ORDER BY chapter_number";
+        $stmt_c = $conn->prepare($chapters_query);
+        $stmt_c->bind_param("i", $group_id);
+        $stmt_c->execute();
+        $chapters_result = $stmt_c->get_result();
+        
+        $chapters = [];
+        while ($chapter = $chapters_result->fetch_assoc()) {
+            $chapters[] = $chapter;
+        }
+        
+        // Store all data for this group
+        $groups_data[] = [
+            'group_info' => $group,
+            'members' => $members,
+            'chapters' => $chapters
+        ];
     }
-    
-    // Store all data for this group
-    $groups_data[] = [
-        'group_info' => $group,
-        'members' => $members,
-        'chapters' => $chapters
-    ];
+} catch (Exception $e) {
+    // Log the error and initialize empty groups data
+    error_log("Error fetching groups data: " . $e->getMessage());
+    $groups_data = [];
 }
 ?>
 
@@ -95,7 +130,7 @@ while ($group = $groups_result->fetch_assoc()) {
             <div class="sidebar-header">
                 <h3>ThesisTrack</h3>
                 <div class="college-info">College of Information and Communication Technology</div>
-                <div class="sidebar-user"><img src="../images/default-user.png" class="image-sidebar-avatar" />
+                <div class="sidebar-user"><img src="<?php echo htmlspecialchars($profile_picture); ?>" class="image-sidebar-avatar" id="sidebarAvatar" />
                 <div class="sidebar-username"><?php echo htmlspecialchars($user_name); ?></div></div>
                 <span class="role-badge">Subject Advisor</span>
             </div>
@@ -146,7 +181,7 @@ while ($group = $groups_result->fetch_assoc()) {
                         <i class="fas fa-bell"></i>
                     </button>
                     <div class="user-info dropdown">
-                        <img src="../images/default-user.png" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0" />
+                        <img src="<?php echo htmlspecialchars($profile_picture); ?>" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0" />
                         <div class="dropdown-menu" id="userDropdown">
                             <a href="#" class="dropdown-item">
                                 <i class="fas fa-cog"></i> Settings

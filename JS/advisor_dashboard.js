@@ -128,3 +128,166 @@ window.addEventListener("resize", () => {
         sidebar.classList.remove("open");
     }
 });
+
+
+// ==================== Start of V7 UPDATE ====================
+
+ // Global variables
+        let selectedFile = null;
+        
+        // Open modal function
+        function openUploadModal() {
+            document.getElementById('uploadModal').style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+        }
+        
+        // Close modal function
+        function closeUploadModal() {
+            document.getElementById('uploadModal').style.display = 'none';
+            document.body.style.overflow = 'auto';
+            resetUploadForm();
+        }
+        
+        // Preview image function
+        function previewImage(input) {
+            const preview = document.getElementById('imagePreview');
+            const uploadBtn = document.getElementById('uploadBtn');
+            
+            if (input.files && input.files[0]) {
+                const file = input.files[0];
+                
+                // Validate file type
+                if (!file.type.match('image.*')) {
+                    showFlashMessage('Please select an image file (JPEG, PNG, etc.)', 'error');
+                    resetUploadForm();
+                    return;
+                }
+                
+                // Validate file size (2MB max)
+                if (file.size > 2 * 1024 * 1024) {
+                    showFlashMessage('Image must be less than 2MB', 'error');
+                    resetUploadForm();
+                    return;
+                }
+                
+                selectedFile = file;
+                
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.src = e.target.result;
+                    preview.style.display = 'block';
+                    uploadBtn.disabled = false;
+                    
+                    // Update the upload area text
+                    const uploadArea = document.querySelector('.upload-area p');
+                    uploadArea.textContent = 'Selected: ' + file.name;
+                }
+                reader.readAsDataURL(file);
+            }
+        }
+        
+  function uploadProfilePicture() {
+    if (!selectedFile) {
+        showFlashMessage('Please select an image first', 'error');
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('profileImage', selectedFile);
+    
+    const uploadBtn = document.getElementById('uploadBtn');
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = 'Uploading...';
+    
+    fetch('advisor_upload_profile.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => {
+        // First check if the response is JSON
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            return response.text().then(text => {
+                throw new Error('Server returned non-JSON response: ' + text);
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.success) {
+            // Update all avatar images on the page
+            const newSrc = '../' + data.filePath + '?t=' + new Date().getTime();
+            
+            // Update sidebar avatar
+            const sidebarAvatar = document.querySelector('.image-sidebar-avatar');
+            if (sidebarAvatar) sidebarAvatar.src = newSrc;
+            
+            // Update header avatar
+            const headerAvatar = document.querySelector('.user-avatar');
+            if (headerAvatar) headerAvatar.src = newSrc;
+            
+            showFlashMessage(data.message, 'success');
+            closeUploadModal();
+        } else {
+            throw new Error(data.message || 'Upload failed');
+        }
+    })
+    .catch(error => {
+        console.error('Upload error:', error);
+        let errorMessage = error.message;
+        
+        // Handle common error cases
+        if (errorMessage.includes('<br />') || errorMessage.includes('<!DOCTYPE')) {
+            errorMessage = 'Server error occurred. Please check the console for details.';
+        }
+        
+        showFlashMessage(errorMessage, 'error');
+    })
+    .finally(() => {
+        uploadBtn.textContent = 'Upload';
+        uploadBtn.disabled = false;
+    });
+}
+        
+        // Reset upload form function
+        function resetUploadForm() {
+            document.getElementById('fileInput').value = '';
+            document.getElementById('imagePreview').src = '';
+            document.getElementById('imagePreview').style.display = 'none';
+            document.querySelector('.upload-area p').textContent = 'Click to select an image';
+            document.getElementById('uploadBtn').disabled = true;
+            selectedFile = null;
+        }
+        
+        // Show flash message function
+        function showFlashMessage(message, type) {
+            // Remove any existing flash messages
+            const existingMessages = document.querySelectorAll('.flash-message');
+            existingMessages.forEach(msg => msg.remove());
+            
+            // Create new message element
+            const flashDiv = document.createElement('div');
+            flashDiv.className = `flash-message ${type}`;
+            flashDiv.textContent = message;
+            document.body.appendChild(flashDiv);
+            
+            // Remove message after 3 seconds
+            setTimeout(() => {
+                flashDiv.remove();
+            }, 3000);
+        }
+        
+        // Close modal when clicking outside
+        document.getElementById('uploadModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeUploadModal();
+            }
+        });
+        
+        // Add click event to your avatar to open the modal
+        document.querySelector('.sidebar-user img').addEventListener('click', function() {
+            openUploadModal();
+        });
+
+
+        // ==================== END OF V7 UPDATE ====================

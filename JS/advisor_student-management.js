@@ -247,37 +247,53 @@ function addNewStudent() {
 }
 
 function editStudent(studentId) {
-  isEditMode = true;
-  currentStudentId = studentId;
+    isEditMode = true;
+    currentStudentId = studentId;
 
-  // Find student data from table
-  const row = document.querySelector(`button[onclick="toggleActionDropdown(${studentId})"]`).closest("tr");
-  const cells = row.querySelectorAll("td");
+    // Find student data from table
+    const row = document.querySelector(`button[onclick="toggleActionDropdown(${studentId})"]`).closest("tr");
+    const cells = row.querySelectorAll("td");
 
-  const fullName = cells[1].textContent.trim();
-  const nameParts = fullName.split(" ");
+    // Extract data from table cells
+    const studentIdText = cells[0].textContent.trim();
+    const fullName = cells[1].textContent.trim();
+    const email = cells[2].textContent.trim();
+    const section = cells[3].textContent.trim();
 
-  const firstName = nameParts[0] || "";
-  const lastName = nameParts[nameParts.length - 1] || "";
-  let middleName = "";
+    // Parse name parts - handle cases where middle name might be present
+    const nameParts = fullName.split(" ");
+    
+    let firstName = nameParts[0] || "";
+    let lastName = nameParts[nameParts.length - 1] || "";
+    let middleName = "";
 
-  if (nameParts.length > 2) {
-    middleName = nameParts.slice(1, -1).join(" ");
-  }
+    // If there are more than 2 parts, the middle parts are the middle name
+    if (nameParts.length > 2) {
+        middleName = nameParts.slice(1, -1).join(" ");
+    }
 
-  // Populate form
-  document.getElementById("studentId").value = studentId;
-  document.getElementById("firstName").value = firstName;
-  document.getElementById("lastName").value = lastName;
-  document.getElementById("middleName").value = middleName;
-  document.getElementById("studentModalTitle").textContent = "Edit Student";
+    // Populate form
+    document.getElementById("studentId").value = studentId;
+    document.getElementById("firstName").value = firstName;
+    document.getElementById("lastName").value = lastName;
+    document.getElementById("middleName").value = middleName;
+    document.getElementById("email").value = email;
+    
+    // Set the section dropdown value
+    const sectionSelect = document.getElementById("section");
+    if (sectionSelect) {
+        sectionSelect.value = section;
+    }
+    
+    document.getElementById("studentModalTitle").textContent = "Edit Student";
 
-  // Show modal
-  showStudentModal();
+    // Show modal
+    showStudentModal();
 
-  // Close action dropdown
-  closeAllActionDropdowns();
+    // Close action dropdown
+    closeAllActionDropdowns();
 }
+
 
 function deleteStudent(studentId) {
   showConfirmModal(
@@ -515,3 +531,180 @@ window.showConfirmModal = showConfirmModal;
 // =============== Start of version 6 update =============== 
 
 // ===============  End of version 6 update =============== 
+
+
+// ===============  Start of version 6 update =============== 
+
+document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.querySelector('.search-input');
+    const table = document.getElementById('groupsTable');
+    
+    // Function to filter table rows
+    function filterTable() {
+        const searchTerm = searchInput.value.toLowerCase();
+        const rows = table.querySelectorAll('tbody tr');
+        
+        rows.forEach(row => {
+            let rowMatches = false;
+            // Get all cells except the first (ID) and last (Actions)
+            const cells = row.querySelectorAll('td:not(:first-child):not(:last-child)');
+            
+            cells.forEach(cell => {
+                const cellText = cell.textContent.toLowerCase();
+                if (cellText.includes(searchTerm)) {
+                    rowMatches = true;
+                }
+            });
+            
+            row.style.display = rowMatches ? '' : 'none';
+            
+            // Highlight matching text
+            if (searchTerm && rowMatches) {
+                highlightMatches(row, searchTerm);
+            } else {
+                removeHighlights(row);
+            }
+        });
+        
+        // Show "No results" message if all rows are hidden
+        showNoResultsMessage();
+    }
+    
+    // Function to highlight matching text
+    function highlightMatches(row, searchTerm) {
+        const cells = row.querySelectorAll('td:not(:first-child):not(:last-child)');
+        
+        cells.forEach(cell => {
+            const text = cell.textContent;
+            const regex = new RegExp(`(${searchTerm})`, 'gi');
+            cell.innerHTML = text.replace(regex, '<span class="search-highlight">$1</span>');
+        });
+    }
+    
+    // Function to remove highlights
+    function removeHighlights(row) {
+        const highlights = row.querySelectorAll('.search-highlight');
+        highlights.forEach(highlight => {
+            const parent = highlight.parentNode;
+            parent.textContent = parent.textContent; // Simple way to remove HTML tags
+        });
+    }
+    
+    // Function to show "No results" message
+    function showNoResultsMessage() {
+        const visibleRows = table.querySelectorAll('tbody tr[style=""]').length;
+        const noDataRow = table.querySelector('.no-data');
+        
+        if (visibleRows === 0 && searchInput.value) {
+            if (!noDataRow) {
+                const row = document.createElement('tr');
+                row.className = 'no-data';
+                row.innerHTML = `
+                    <td colspan="8">
+                        <i class="fas fa-search-minus"></i>
+                        <p>No matching groups found</p>
+                        <p>Try a different search term</p>
+                    </td>
+                `;
+                table.querySelector('tbody').appendChild(row);
+            }
+        } else if (noDataRow) {
+            noDataRow.remove();
+        }
+    }
+    
+    // Add debounce to improve performance
+    function debounce(func, wait) {
+        let timeout;
+        return function() {
+            const context = this, args = arguments;
+            clearTimeout(timeout);
+            timeout = setTimeout(() => {
+                func.apply(context, args);
+            }, wait);
+        };
+    }
+    
+    // Event listeners
+    searchInput.addEventListener('input', debounce(filterTable, 300));
+    
+    // Trigger initial search if there's a search term
+    if (searchInput.value) {
+        filterTable();
+    }
+});
+// ===============  End of version 6 update =============== 
+
+// =============== NO VERSION 7 UPDATE =============== 
+
+// ===============  Start of of version 8 update =============== 
+    function exportCSV(type) {
+        window.location.href = '?action=export_csv&type=' + type;
+    }
+
+    function showImportModal() {
+        document.getElementById('importModal').style.display = 'block';
+        document.getElementById('importResults').style.display = 'none';
+        document.getElementById('importForm').reset();
+    }
+
+    function closeImportModal() {
+        document.getElementById('importModal').style.display = 'none';
+    }
+
+    function submitImport() {
+        const fileInput = document.getElementById('csvFile');
+        if (!fileInput.files.length) {
+            alert('Please select a CSV file to import.');
+            return;
+        }
+        
+        const formData = new FormData();
+        formData.append('action', 'import_csv');
+        formData.append('csv_file', fileInput.files[0]);
+        
+        fetch('', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            const resultsDiv = document.getElementById('importResults');
+            const successDiv = document.getElementById('importSuccess');
+            const errorsDiv = document.getElementById('importErrors');
+            
+            resultsDiv.style.display = 'block';
+            
+            if (data.success) {
+                successDiv.innerHTML = `<i class="fas fa-check-circle"></i> ${data.message}`;
+                successDiv.style.display = 'block';
+                
+                if (data.errors && data.errors.length > 0) {
+                    errorsDiv.innerHTML = '<strong>Errors:</strong><ul>' + 
+                        data.errors.map(error => `<li>${error}</li>`).join('') + 
+                        '</ul>';
+                    errorsDiv.style.display = 'block';
+                } else {
+                    errorsDiv.style.display = 'none';
+                }
+                
+                // Reload the page after a successful import
+                setTimeout(() => { location.reload(); }, 3000);
+            } else {
+                successDiv.style.display = 'none';
+                errorsDiv.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${data.message}`;
+                if (data.errors && data.errors.length > 0) {
+                    errorsDiv.innerHTML += '<ul>' + 
+                        data.errors.map(error => `<li>${error}</li>`).join('') + 
+                        '</ul>';
+                }
+                errorsDiv.style.display = 'block';
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('An error occurred during import.');
+        });
+    }
+    
+    

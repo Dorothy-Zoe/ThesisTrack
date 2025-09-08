@@ -8,9 +8,9 @@ if (!isset($_SESSION['user_id'])) {
     exit();
 }
 
-// Verify the user is actually a coordinator
+// In your coordinator session verification code:
 try {
-    $stmt = $pdo->prepare("SELECT id, CONCAT(first_name, ' ', last_name) AS name FROM coordinators WHERE id = ? AND status = 'active'");
+    $stmt = $pdo->prepare("SELECT id, CONCAT(first_name, ' ', last_name) AS name, profile_picture FROM coordinators WHERE id = ? AND status = 'active'");
     $stmt->execute([$_SESSION['user_id']]);
     $coordinator = $stmt->fetch();
     
@@ -20,6 +20,19 @@ try {
     }
     
     $user_name = $coordinator['name'];
+    
+    // Check if profile picture exists
+    $profile_picture = '../images/default-user.png'; // Default fallback
+    if (!empty($coordinator['profile_picture'])) {
+        $imagePath = '../uploads/profile_pictures/' . $coordinator['profile_picture'];
+        if (file_exists($imagePath)) {
+            $profile_picture = $imagePath;
+        } else {
+            // Clean up invalid reference
+            $updateStmt = $pdo->prepare("UPDATE coordinators SET profile_picture = NULL WHERE id = ?");
+            $updateStmt->execute([$_SESSION['user_id']]);
+        }
+    }
 } catch (PDOException $e) {
     error_log("Database error: " . $e->getMessage());
     header('Location: ../login.php');
@@ -193,6 +206,38 @@ try {
     $program_stats = [];
     $recent_activity = [];
 }
+
+function getProfilePicture($user_id) {
+    global $pdo;
+    
+    try {
+        // Query the coordinators table instead
+        $stmt = $pdo->prepare("SELECT profile_picture FROM coordinators WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $result = $stmt->fetch();
+        
+        // Check if profile picture exists in database and filesystem
+        if ($result && !empty($result['profile_picture'])) {
+            $imagePath = '../uploads/profile_pictures/' . $result['profile_picture'];
+            
+            // Verify the file actually exists
+            if (file_exists($imagePath)) {
+                return $imagePath;
+            } else {
+                // Clean up invalid reference
+                $updateStmt = $pdo->prepare("UPDATE coordinators SET profile_picture = NULL WHERE id = ?");
+                $updateStmt->execute([$user_id]);
+            }
+        }
+    } catch (PDOException $e) {
+        error_log("Database error fetching profile picture: " . $e->getMessage());
+    }
+    
+    // Default fallback image
+    return '../images/default-user.png';
+}
+
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -211,10 +256,14 @@ try {
             <div class="sidebar-header">
                 <h2>ThesisTrack</h2>
                 <div class="college-info">College of Information and Communication Technology</div>
-                <div class="sidebar-user">
-                    <img src="../images/default-user.png" class="sidebar-avatar" alt="User Avatar" />
-                    <div class="sidebar-username"><?php echo htmlspecialchars($user_name); ?></div>
-                </div>
+               <div class="sidebar-user" onclick="openUploadModal()">
+    <img src="<?php echo $profile_picture; ?>?t=<?php echo time(); ?>" 
+         class="sidebar-avatar" 
+         alt="User Avatar" 
+         id="currentProfilePicture" />
+    <div class="sidebar-username"><?php echo htmlspecialchars($user_name); ?></div>
+</div>
+
                 <span class="role-badge">Research Coordinator</span>
             </div>
             <!-- Sidebar Navigation -->
@@ -260,7 +309,11 @@ try {
                         <i class="fas fa-bell"></i>
                     </button>
                     <div class="user-info dropdown">
-                        <img src="../images/default-user.png" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0" />
+                        <img src="<?php echo getProfilePicture($_SESSION['user_id']); ?>?t=<?php echo time(); ?>" 
+                        alt="User Avatar" 
+                        class="user-avatar" 
+                        id="userAvatar" 
+                        tabindex="0" />
                         <div class="dropdown-menu" id="userDropdown">
                             <a href="#" class="dropdown-item">
                                 <i class="fas fa-cog"></i> Settings
@@ -388,6 +441,24 @@ try {
             </main>
         </div>
     </div>
+
+    <!-- Upload Modal (add this at the bottom of your page) -->
+<div class="profile-upload-modal" id="uploadModal">
+    <div class="profile-upload-modal-content">
+        <span class="profile-upload-close" onclick="closeUploadModal()">&times;</span>
+        <h3>Update Profile Picture</h3>
+        
+        <form id="avatarUploadForm" enctype="multipart/form-data">
+            <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+                <i class="fas fa-cloud-upload-alt"></i>
+                <p>Click to select an image</p>
+                <img id="imagePreview" class="preview-image">
+                <input type="file" id="fileInput" name="profile_picture" accept="image/*" style="display:none;" onchange="previewImage(this)">
+            </div>
+            <button type="button" class="upload-button" id="uploadBtn" onclick="uploadProfilePicture()">Upload</button>
+        </form>
+    </div>
+</div>
    
     <script src="../JS/coordinator_dashboard.js"></script>
     

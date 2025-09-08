@@ -13,6 +13,60 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'advisor') {
 $advisor_id = $_SESSION['user_id'];
 $advisor_name = $_SESSION['name'] ?? 'Advisor';
 
+$profile_picture = '../images/default-user.png'; // Default image
+
+try {
+    // Get advisor details including profile picture
+    $stmt = $pdo->prepare("SELECT first_name, last_name, profile_picture FROM advisors WHERE id = ?");
+    $stmt->execute([$advisor_id]);
+    $advisor = $stmt->fetch();
+    
+    $user_name = ($advisor['first_name'] && $advisor['last_name']) ? $advisor['first_name'] . ' ' . $advisor['last_name'] : 'Advisor';
+    
+    // Check if profile picture exists and is valid
+    if (!empty($advisor['profile_picture'])) {
+        $relative_path = $advisor['profile_picture'];
+        $absolute_path = __DIR__ . '/../' . $relative_path;
+        
+        if (file_exists($absolute_path) && is_readable($absolute_path)) {
+            $profile_picture = '../' . $relative_path;
+        } else {
+            error_log("Profile image not found: " . $absolute_path);
+        }
+    }
+
+} catch (PDOException $e) {
+    // Log the error and use default values
+    error_log("Database error fetching advisor details: " . $e->getMessage());
+    $user_name = 'Advisor';
+    $profile_picture = '../images/default-user.png';
+}
+
+
+// Initialize sorting variables from URL parameters
+$sort_col = $_GET['sort'] ?? 'title'; // Default sort column
+$sort_order = $_GET['order'] ?? 'asc'; // Default sort order
+
+// Validate sort column to prevent SQL injection
+$valid_columns = ['id', 'title', 'section', 'status', 'thesis_title'];
+if (!in_array($sort_col, $valid_columns)) {
+    $sort_col = 'title';
+}
+
+// Validate sort order
+$sort_order = strtolower($sort_order) === 'desc' ? 'DESC' : 'ASC';
+
+// Function to generate sort arrows
+function getSortArrows($current_col, $sort_col, $sort_order) {
+    if ($current_col == $sort_col) {
+        // Active state: Solid caret-style arrow
+        $arrow = $sort_order == 'ASC' ? 'caret-up' : 'caret-down';
+        return '<i class="fas fa-'.$arrow.' active-arrow" title="Sorted"></i>';
+    }
+    // Neutral state: Standard sort icon
+    return '<i class="fas fa-sort neutral-arrow" title="Click to sort"></i>';
+}       
+
 // Get advisor's sections and course with proper handling of multiple sections
 try {
     $stmt = $pdo->prepare("SELECT sections_handled, department FROM advisors WHERE id = ?");
@@ -380,10 +434,11 @@ try {
         FROM groups g
         JOIN student_groups sg ON g.id = sg.group_id
         WHERE g.advisor_id = ?
-        ORDER BY g.section, g.title
+        ORDER BY $sort_col $sort_order, g.section, g.title
     ");
     $stmt->execute([$advisor_id]);
     $groups = $stmt->fetchAll();
+
 
     // Get members for each group
     foreach ($groups as &$group) {
@@ -429,6 +484,12 @@ try {
 } catch (PDOException $e) {
     $ungrouped_students = [];
 }
+
+// Pagination settings
+$per_page = 5; // Number of items per page
+$page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1; // Current page
+$offset = ($page - 1) * $per_page;
+
 ?>
 
 <!DOCTYPE html>
@@ -453,7 +514,7 @@ try {
                 <h3>ThesisTrack</h3>
                 <div class="college-info">College of Information and Communication Technology</div>
                 <div class="sidebar-user">
-                    <img src="../images/default-user.png" class="image-sidebar-avatar" />
+                   <img src="<?php echo htmlspecialchars($profile_picture); ?>" class="image-sidebar-avatar" id="sidebarAvatar" />
                     <div class="sidebar-username"><?php echo htmlspecialchars($advisor_name); ?></div>
                 </div>
                 <span class="role-badge">Subject Advisor</span>
@@ -505,7 +566,7 @@ try {
                             <i class="fas fa-bell"></i>
                         </button>
                             <div class="user-info dropdown">
-                                <img src="../images/default-user.png" alt="Avatar" class="headerAvatar" id="headerAvatar" tabindex="0" />
+                                <img src="<?php echo htmlspecialchars($profile_picture); ?>" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0" />
                                 <div class="dropdown-menu" id="userDropdown">
                                     <a href="#" class="dropdown-item">
                                         <i class="fas fa-cog"></i> Settings
@@ -563,22 +624,54 @@ try {
                             <span class="info-badge">Ungrouped Students: <?php echo count($ungrouped_students); ?></span>
                         </div>
                     </div>
+
+                   <!-- Show entries and Search -->
+<div class="table-controls-row">
+    <div class="entries-selector">
+        <span>Show</span>
+        <select name="entries" onchange="this.form.submit()" class="entries-select">
+            <?php
+            $entries_options = [5, 10, 25, 50];
+            $selected_entries = $_GET['entries'] ?? 5;
+            
+            foreach ($entries_options as $option) {
+                $selected = ($option == $selected_entries) ? 'selected' : '';
+                echo "<option value='$option' $selected>$option</option>";
+            }
+            ?>
+        </select>
+        <span>entries</span>
+    </div>
+
+    <form class="modern-search" method="GET" action="">
+        <div class="search-container">
+            <i class="fas fa-search"></i>
+            <input type="text" name="search" placeholder="Search here..." class="search-input" 
+                value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
+            
+            <!-- Preserve all GET parameters except search and page -->
+            <input type="hidden" name="sort" value="<?= htmlspecialchars($_GET['sort'] ?? '') ?>">
+            <input type="hidden" name="order" value="<?= htmlspecialchars($_GET['order'] ?? '') ?>">
+            <input type="hidden" name="entries" value="<?= htmlspecialchars($_GET['entries'] ?? '') ?>">
+        </div>
+    </form>
+</div>
     
                     <!-- Groups Table -->
                     <div class="table-container">
                         <table id="groupsTable" class="students-table">
-                            <thead>
-                                <tr>
-                                    <th>Group ID</th>
-                                    <th>Group Name</th>
-                                    <th>Thesis Title</th>
-                                    <th>Members</th>
-                                    <th>Section</th>
-                                    <th>Advisor</th>
-                                    <th>Status</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
+                         <thead>
+    <tr>
+        <th><a href="?sort=id&order=<?= $sort_col == 'id' && $sort_order == 'ASC' ? 'desc' : 'asc' ?>">Group ID <?= getSortArrows('id', $sort_col, $sort_order) ?></a></th>
+        <th><a href="?sort=title&order=<?= $sort_col == 'title' && $sort_order == 'ASC' ? 'desc' : 'asc' ?>">Group Name <?= getSortArrows('title', $sort_col, $sort_order) ?></a></th>
+        <th><a href="?sort=thesis_title&order=<?= $sort_col == 'thesis_title' && $sort_order == 'ASC' ? 'desc' : 'asc' ?>">Thesis Title <?= getSortArrows('thesis_title', $sort_col, $sort_order) ?></a></th>
+        <th>Members</th>
+        <th><a href="?sort=section&order=<?= $sort_col == 'section' && $sort_order == 'ASC' ? 'desc' : 'asc' ?>">Section <?= getSortArrows('section', $sort_col, $sort_order) ?></a></th>
+        <th>Advisor</th>
+        <th><a href="?sort=status&order=<?= $sort_col == 'status' && $sort_order == 'ASC' ? 'desc' : 'asc' ?>">Status <?= getSortArrows('status', $sort_col, $sort_order) ?></a></th>
+        <th>Actions</th>
+    </tr>
+</thead>
                             <tbody>
                                 <?php if (empty($groups)): ?>
                                     <tr>

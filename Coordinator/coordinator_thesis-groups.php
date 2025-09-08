@@ -8,8 +8,28 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'coordinator') {
     exit();
 }
 
-// Get the user's name from the session with proper sanitization
-$user_name = isset($_SESSION['name']) ? htmlspecialchars($_SESSION['name'], ENT_QUOTES, 'UTF-8') : 'Coordinator';
+
+// =================V7 UPDATE
+// In your coordinator session verification code:
+try {
+    $stmt = $pdo->prepare("SELECT id, CONCAT(first_name, ' ', last_name) AS name, profile_picture FROM coordinators WHERE id = ? AND status = 'active'");
+    $stmt->execute([$_SESSION['user_id']]);
+    $coordinator = $stmt->fetch();
+    
+    if (!$coordinator) {
+        header('Location: ../login.php');
+        exit();
+    }
+    
+    $user_name = $coordinator['name'];
+    $profile_picture = $coordinator['profile_picture'] ? '../uploads/profile_pictures/' . $coordinator['profile_picture'] : '../images/default-user.png';
+} catch (PDOException $e) {
+    error_log("Database error: " . $e->getMessage());
+    header('Location: ../login.php');
+    exit();
+}
+// =================END OF V7 UPDATE
+
 
 // Fetch thesis groups data from database
 try {
@@ -78,7 +98,96 @@ try {
     $advisors = [];
     $error_message = "Unable to load thesis groups data. Please try again later.";
 }
+
+
+// Sorting functionality
+$sort_column = $_GET['sort'] ?? 'group_name';
+$sort_order = $_GET['order'] ?? 'asc';
+
+// Search functionality
+$search_term = $_GET['search'] ?? '';
+
+// Filter functionality
+$program_filter = $_GET['program'] ?? '';
+$section_filter = $_GET['section'] ?? '';
+$advisor_filter = $_GET['advisor'] ?? '';
+$status_filter = $_GET['status'] ?? '';
+
+// Apply filters and search
+$filtered_groups = array_filter($groups, function($group) use ($program_filter, $section_filter, $advisor_filter, $status_filter, $search_term) {
+    $matches = true;
+    
+    if ($program_filter && $group['course'] != $program_filter) {
+        $matches = false;
+    }
+    
+    if ($section_filter && $group['section'] != $section_filter) {
+        $matches = false;
+    }
+    
+    if ($advisor_filter && $group['advisor_name'] != $advisor_filter) {
+        $matches = false;
+    }
+    
+    if ($status_filter && $group['group_status'] != $status_filter) {
+        $matches = false;
+    }
+    
+    if ($search_term) {
+        $search_match = false;
+        $search_fields = ['group_name', 'thesis_title', 'section', 'course', 'advisor_name'];
+        foreach ($search_fields as $field) {
+            if (stripos($group[$field], $search_term) !== false) {
+                $search_match = true;
+                break;
+            }
+        }
+        $matches = $matches && $search_match;
+    }
+    
+    return $matches;
+});
+
+// Sorting
+usort($filtered_groups, function($a, $b) use ($sort_column, $sort_order) {
+    $val1 = $a[$sort_column];
+    $val2 = $b[$sort_column];
+    
+    if ($sort_order == 'asc') {
+        return $val1 <=> $val2;
+    } else {
+        return $val2 <=> $val1;
+    }
+});
+
+// ================== Start of Version 7 update ================== //
+
+// Pagination
+$per_page = 5;
+$page = $_GET['page'] ?? 1;
+$total_groups = count($filtered_groups);
+$total_pages = ceil($total_groups / $per_page);
+$offset = ($page - 1) * $per_page;
+$paginated_groups = array_slice($filtered_groups, $offset, $per_page);
+
+// Function to generate sort arrows with distinct icons
+function getSortArrows($current_col, $sort_col, $sort_order) {
+    if ($current_col == $sort_col) {
+        // Active state: Solid caret-style arrow
+        $arrow = $sort_order == 'asc' ? 'caret-up' : 'caret-down';
+        return '<i class="fas fa-'.$arrow.' active-arrow" title="Sorted"></i>';
+    }
+    // Neutral state: Standard sort icon
+    return '<i class="fas fa-sort neutral-arrow" title="Click to sort"></i>';
+}
+
+$entries_per_page = $_GET['entries'] ?? 5;
+$total_pages = ceil(count($filtered_groups) / $entries_per_page);
+
+// ================== End of Version 7 update ================== //
+
 ?>
+
 
 <!DOCTYPE html>
 <html lang="en">
@@ -101,7 +210,11 @@ try {
                 <h2>ThesisTrack</h2>
                 <div class="college-info">College of Information and Communication Technology</div>
                 <div class="sidebar-user">
-                    <img src="../images/default-user.png" class="sidebar-avatar" alt="User Avatar">
+                    <img src="<?php echo $profile_picture; ?>?t=<?php echo time(); ?>" 
+         class="sidebar-avatar" 
+         alt="Coordinator Avatar"
+         id="currentProfilePicture"
+         onerror="this.src='../images/default-user.png'" />
                     <div class="sidebar-username"><?php echo $user_name; ?></div>
                 </div>
                 <span class="role-badge">Research Coordinator</span>
@@ -148,7 +261,12 @@ try {
                         <i class="fas fa-bell"></i>
                     </button>
                     <div class="user-info dropdown">
-                        <img src="../images/default-user.png" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0">
+                        <img src="<?php echo htmlspecialchars($profile_picture); ?>?t=<?php echo time(); ?>" 
+                            alt="User Avatar" 
+                            class="user-avatar" 
+                            id="userAvatar" 
+                            tabindex="0"
+                            onerror="this.src='../images/default-user.png'" />
                         <div class="dropdown-menu" id="userDropdown">
                             <a href="#" class="dropdown-item">
                                 <i class="fas fa-cog"></i> Settings
@@ -241,22 +359,82 @@ try {
                                 <i class="fas fa-info-circle"></i> No thesis groups found.
                             </div>
                         <?php else: ?>
-                            <table id="groupsTable" class="groups-table display">
-                                <thead>
-                                    <tr>
-                                        <th>Group</th>
-                                        <th>Section</th>
-                                        <th>Program</th>
-                                        <th>Thesis Title</th>
-                                        <th>Members</th>
-                                        <th>Advisor</th>
-                                        <th>Progress</th>
-                                        <th>Status</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($groups as $group): 
+
+                        <div class="table-scroll-wrapper"> <!-- VERSION 7 UPDATE 7/21 -->
+
+                        <!-- show entries -->
+                            <div class="table-controls-row">
+                                <div class="entries-selector">
+                                    <span>Show</span>
+                                    <select name="entries" onchange="this.form.submit()" class="entries-select">
+                                        <?php
+                                        $entries_options = [5, 10, 25, 50];
+                                        $selected_entries = $_GET['entries'] ?? 5;
+                                        
+                                        foreach ($entries_options as $option) {
+                                            $selected = ($option == $selected_entries) ? 'selected' : '';
+                                            echo "<option value='$option' $selected>$option</option>";
+                                        }
+                                        ?>
+                                    </select>
+                                    <span>entries</span>
+                                </div>
+
+                                <form class="modern-search" method="GET" action="">
+                                    <div class="search-container">
+                                        <i class="fas fa-search"></i>
+                                        <input type="text" name="search" placeholder="Search here..." class="search-input" 
+                                            value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
+                                        <!-- Preserve other GET parameters -->
+                                        <?php foreach ($_GET as $key => $value): ?>
+                                            <?php if ($key !== 'search' && $key !== 'page'): ?>
+                                                <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </form>
+                            </div>
+    
+                    <table id="groupsTable" class="groups-table">
+                        <thead>
+                            <tr>
+                                <th>
+                                    <a href="?sort=group_name&order=<?= $sort_column == 'group_name' && $sort_order == 'asc' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>">
+                                        Group <?= getSortArrows('group_name', $sort_column, $sort_order) ?>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="?sort=section&order=<?= $sort_column == 'section' && $sort_order == 'asc' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>">
+                                        Section <?= getSortArrows('section', $sort_column, $sort_order) ?>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="?sort=course&order=<?= $sort_column == 'course' && $sort_order == 'asc' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>">
+                                        Program <?= getSortArrows('course', $sort_column, $sort_order) ?>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="?sort=thesis_title&order=<?= $sort_column == 'thesis_title' && $sort_order == 'asc' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>">
+                                        Thesis Title <?= getSortArrows('thesis_title', $sort_column, $sort_order) ?>
+                                    </a>
+                                </th>
+                                <th>Members</th>
+                                <th>
+                                    <a href="?sort=advisor_name&order=<?= $sort_column == 'advisor_name' && $sort_order == 'asc' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>">
+                                        Advisor <?= getSortArrows('advisor_name', $sort_column, $sort_order) ?>
+                                    </a>
+                                </th>
+                                <th>Progress</th>
+                                <th>
+                                    <a href="?sort=group_status&order=<?= $sort_column == 'group_status' && $sort_order == 'asc' ? 'desc' : 'asc' ?>&search=<?= urlencode($search_term) ?>">
+                                        Status <?= getSortArrows('group_status', $sort_column, $sort_order) ?>
+                                    </a>
+                                </th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                    <tbody>
+                <?php foreach ($paginated_groups as $group): 
                                         // Calculate progress percentage
                                         $progress = $group['total_chapters'] > 0 
                                             ? round(($group['approved_chapters'] / $group['total_chapters']) * 100) 
@@ -372,6 +550,26 @@ try {
                                     <?php endforeach; ?>
                                 </tbody>
                             </table>
+
+                             <!-- V7 Update: Pagination (7/21) -->
+                            <div class="pagination">
+                                <?php if ($page > 1): ?>
+                                    <a href="?page=<?= $page-1 ?>&sort=<?= $sort_column ?>&order=<?= $sort_order ?>&search=<?= urlencode($search_term) ?>">&laquo; Previous</a>
+                                <?php endif; ?>
+                                
+                                <?php for ($i = 1; $i <= $total_pages; $i++): ?>
+                                    <a href="?page=<?= $i ?>&sort=<?= $sort_column ?>&order=<?= $sort_order ?>&search=<?= urlencode($search_term) ?>" <?= $i == $page ? 'class="active"' : '' ?>>
+                                        <?= $i ?>
+                                    </a>
+                                <?php endfor; ?>
+                                
+                                <?php if ($page < $total_pages): ?>
+                                    <a href="?page=<?= $page+1 ?>&sort=<?= $sort_column ?>&order=<?= $sort_order ?>&search=<?= urlencode($search_term) ?>">Next &raquo;</a>
+                                <?php endif; ?>
+                            </div>
+
+                            </div>
+                          </div>
                         <?php endif; ?>
                     </div>
                 </div>

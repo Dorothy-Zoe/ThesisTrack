@@ -103,3 +103,188 @@ function initLogout() {
         window.location.href = '../logout.php';
     });
 }
+
+// ==================== Start of V7 UPDATE ====================
+// Global variables
+let selectedFile = null;
+
+// Open modal function
+function openUploadModal() {
+    document.getElementById('uploadModal').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    resetUploadForm(); // Reset form when opening
+}
+
+// Close modal function
+function closeUploadModal() {
+    document.getElementById('uploadModal').style.display = 'none';
+    document.body.style.overflow = 'auto';
+    resetUploadForm();
+}
+
+// Preview image function
+function previewImage(input) {
+    const preview = document.getElementById('imagePreview');
+    const uploadBtn = document.getElementById('uploadBtn');
+    
+    if (input.files && input.files[0]) {
+        const file = input.files[0];
+        
+        // Validate file type
+        const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
+        if (!allowedTypes.includes(file.type)) {
+            showFlashMessage('Please select a JPG, PNG, or GIF image', 'error');
+            resetUploadForm();
+            return;
+        }
+        
+        // Validate file size (2MB max)
+        if (file.size > 2 * 1024 * 1024) {
+            showFlashMessage('Image must be less than 2MB', 'error');
+            resetUploadForm();
+            return;
+        }
+        
+        selectedFile = file;
+        
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            preview.src = e.target.result;
+            preview.style.display = 'block';
+            uploadBtn.disabled = false;
+            
+            // Update the upload area text
+            const uploadArea = document.querySelector('.upload-area p');
+            uploadArea.textContent = 'Selected: ' + file.name;
+            uploadArea.style.color = '#333';
+        }
+        reader.readAsDataURL(file);
+    }
+}
+
+function uploadProfilePicture() {
+    if (!selectedFile) {
+        showFlashMessage('Please select an image first', 'error');
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('profile_picture', selectedFile);
+    
+    const uploadBtn = document.getElementById('uploadBtn');
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = 'Uploading...';
+    
+    fetch('student_upload_profile.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Add timestamp to prevent caching
+            const newSrc = '../' + data.image_path + '?t=' + Date.now();
+            
+            // Update all profile images on the page
+            document.querySelectorAll('.sidebar-avatar, .user-avatar, #sidebarProfileImage, #userAvatar').forEach(img => {
+                img.src = newSrc;
+            });
+            
+            showFlashMessage('Profile picture updated!', 'success');
+            closeUploadModal();
+        } else {
+            throw new Error(data.message || 'Upload failed');
+        }
+    })
+    .catch(error => {
+        showFlashMessage(error.message, 'error');
+    })
+    .finally(() => {
+        uploadBtn.textContent = 'Upload';
+        uploadBtn.disabled = false;
+    });
+}
+
+// Reset upload form function
+function resetUploadForm() {
+    document.getElementById('fileInput').value = '';
+    document.getElementById('imagePreview').src = '';
+    document.getElementById('imagePreview').style.display = 'none';
+    const uploadText = document.querySelector('.upload-area p');
+    if (uploadText) {
+        uploadText.textContent = 'Click to select an image';
+        uploadText.style.color = '#777';
+    }
+    document.getElementById('uploadBtn').disabled = true;
+    selectedFile = null;
+}
+
+// Show flash message function
+function showFlashMessage(message, type) {
+    // Remove any existing flash messages
+    const existingMessages = document.querySelectorAll('.flash-message');
+    existingMessages.forEach(msg => msg.remove());
+    
+    // Create new message element
+    const flashDiv = document.createElement('div');
+    flashDiv.className = `flash-message ${type}`;
+    flashDiv.textContent = message;
+    document.body.appendChild(flashDiv);
+    
+    // Position the message (centered at top)
+    flashDiv.style.position = 'fixed';
+    flashDiv.style.top = '20px';
+    flashDiv.style.left = '50%';
+    flashDiv.style.transform = 'translateX(-50%)';
+    flashDiv.style.padding = '10px 20px';
+    flashDiv.style.borderRadius = '4px';
+    flashDiv.style.zIndex = '10000';
+    flashDiv.style.animation = 'fadeIn 0.3s ease-in-out';
+    
+    // Style based on type
+    if (type === 'success') {
+        flashDiv.style.backgroundColor = '#4CAF50';
+        flashDiv.style.color = 'white';
+    } else {
+        flashDiv.style.backgroundColor = '#f44336';
+        flashDiv.style.color = 'white';
+    }
+    
+    // Remove message after 3 seconds
+    setTimeout(() => {
+        flashDiv.style.animation = 'fadeOut 0.3s ease-in-out';
+        setTimeout(() => {
+            flashDiv.remove();
+        }, 300);
+    }, 3000);
+}
+
+// Close modal when clicking outside
+document.getElementById('uploadModal').addEventListener('click', function(e) {
+    if (e.target === this) {
+        closeUploadModal();
+    }
+});
+
+// Add click event to your avatar to open the modal (if exists)
+document.querySelectorAll('.sidebar-user img, .profile-picture').forEach(el => {
+    el.addEventListener('click', function() {
+        openUploadModal();
+    });
+});
+
+// Add CSS for animations
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+        to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+    @keyframes fadeOut {
+        from { opacity: 1; transform: translateX(-50%) translateY(0); }
+        to { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+    }
+`;
+document.head.appendChild(style);
+
+// ==================== END OF V7 UPDATE ====================

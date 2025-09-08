@@ -8,8 +8,27 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'coordinator') {
     exit();
 }
 
-// Get coordinator name
-$user_name = $_SESSION['name'] ?? 'Coordinator'; 
+// =================V7 UPDATE
+// In your coordinator session verification code:
+try {
+    $stmt = $pdo->prepare("SELECT id, CONCAT(first_name, ' ', last_name) AS name, profile_picture FROM coordinators WHERE id = ? AND status = 'active'");
+    $stmt->execute([$_SESSION['user_id']]);
+    $coordinator = $stmt->fetch();
+    
+    if (!$coordinator) {
+        header('Location: ../login.php');
+        exit();
+    }
+    
+    $user_name = $coordinator['name'];
+    $profile_picture = $coordinator['profile_picture'] ? '../uploads/profile_pictures/' . $coordinator['profile_picture'] : '../images/default-user.png';
+} catch (PDOException $e) {
+    error_log("Database error: " . $e->getMessage());
+    header('Location: ../login.php');
+    exit();
+}
+// =================END OF V7 UPDATE
+
 
 // Fetch section-advisor data from database
 try {
@@ -80,10 +99,14 @@ try {
             <div class="sidebar-header">
                 <h2>ThesisTrack</h2>
                 <div class="college-info">College of Information and Communication Technology</div>
-                <div class="sidebar-user">
-                    <img src="../images/default-user.png" class="sidebar-avatar" />
-                    <div class="sidebar-username"><?php echo htmlspecialchars($user_name); ?></div>
-                </div>
+               <div class="sidebar-user">
+    <img src="<?php echo $profile_picture; ?>?t=<?php echo time(); ?>" 
+         class="sidebar-avatar" 
+         alt="Coordinator Avatar"
+         id="currentProfilePicture"
+         onerror="this.src='../images/default-user.png'" />
+    <div class="sidebar-username"><?php echo htmlspecialchars($user_name); ?></div>
+</div>
                 <span class="role-badge">Research Coordinator</span>
             </div>
             <nav class="sidebar-nav">
@@ -127,7 +150,12 @@ try {
                         <i class="fas fa-bell"></i>
                     </button>
                     <div class="user-info dropdown">
-                        <img src="../images/default-user.png" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0"/>
+                        <img src="<?php echo htmlspecialchars($profile_picture); ?>?t=<?php echo time(); ?>" 
+                            alt="User Avatar" 
+                            class="user-avatar" 
+                            id="userAvatar" 
+                            tabindex="0"
+                            onerror="this.src='../images/default-user.png'" />
                         <div class="dropdown-menu" id="userDropdown">
                             <a href="#" class="dropdown-item">
                                 <i class="fas fa-cog"></i> Settings

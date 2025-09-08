@@ -1,6 +1,6 @@
 <?php
 session_start();
-require_once '../db/db.php'; // Assuming this uses MySQLi connection
+require_once '../db/db.php'; // Make sure this returns a consistent connection ($pdo or $conn)
 
 // Check if the user is logged in and has the 'advisor' role
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'advisor') {
@@ -8,13 +8,36 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'advisor') {
     exit();
 }
 
-// Get the logged-in advisor's ID
+// Get the logged-in advisor's ID and name
 $advisor_id = $_SESSION['user_id'];
-$user_name = $_SESSION['name'] ?? 'Advisor';
-
-// Fetch feedback history for this advisor
+$user_name = 'Advisor';
 $feedback_history = [];
+$error_message = null;
+
+$profile_picture = '../images/default-user.png'; // Default image
+
 try {
+    // Get advisor details including profile picture
+    $stmt = $pdo->prepare("SELECT first_name, last_name, profile_picture FROM advisors WHERE id = ?");
+    $stmt->execute([$advisor_id]);
+    $advisor = $stmt->fetch();
+    
+    $user_name = ($advisor['first_name'] && $advisor['last_name']) ? $advisor['first_name'] . ' ' . $advisor['last_name'] : 'Advisor';
+    
+    // Check if profile picture exists and is valid
+    if (!empty($advisor['profile_picture'])) {
+        $relative_path = $advisor['profile_picture'];
+        $absolute_path = __DIR__ . '/../' . $relative_path;
+        
+        if (file_exists($absolute_path) && is_readable($absolute_path)) {
+            $profile_picture = '../' . $relative_path;
+        } else {
+            error_log("Profile image not found: " . $absolute_path);
+        }
+    }
+
+
+    // Fetch feedback history for this advisor
     $sql = "
         SELECT 
             cc.id AS comment_id,
@@ -43,9 +66,16 @@ try {
     $result = $stmt->get_result();
     $feedback_history = $result->fetch_all(MYSQLI_ASSOC);
     $stmt->close();
-} catch (Exception $e) {
-    error_log("Database error: " . $e->getMessage());
+
+} catch (PDOException $e) {
+    error_log("PDO Database error: " . $e->getMessage());
+    $error_message = "Unable to fetch advisor details. Please try again later.";
+} catch (mysqli_sql_exception $e) {
+    error_log("MySQLi Database error: " . $e->getMessage());
     $error_message = "Unable to fetch feedback history. Please try again later.";
+} catch (Exception $e) {
+    error_log("General error: " . $e->getMessage());
+    $error_message = "An unexpected error occurred. Please try again later.";
 }
 ?>
 
@@ -67,7 +97,7 @@ try {
             <div class="sidebar-header">
                 <h3>ThesisTrack</h3>
                 <div class="college-info">College of Information and Communication Technology</div>
-                <div class="sidebar-user"><img src="../images/default-user.png" class="user-avatar" />
+                <div class="sidebar-user"><img src="<?php echo htmlspecialchars($profile_picture); ?>" class="image-sidebar-avatar" id="sidebarAvatar" />
                 <div class="sidebar-username"><?php echo htmlspecialchars($user_name); ?></div></div>
                 <span class="role-badge">Subject Advisor</span>
             </div>
@@ -121,13 +151,7 @@ try {
                 <button class="topbar-icon" title="Notifications">
                 <i class="fas fa-bell"></i></button>
                 <div class="user-info dropdown">
-                <img
-                src="../images/default-user.png"
-                alt="User Avatar"
-                class="user-avatar"
-                id="userAvatar"
-                tabindex="0"
-                />
+                <img src="<?php echo htmlspecialchars($profile_picture); ?>" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0" />
         <div class="dropdown-menu" id="userDropdown">
           <a href="#" class="dropdown-item">
             <i class="fas fa-cog"></i> Settings

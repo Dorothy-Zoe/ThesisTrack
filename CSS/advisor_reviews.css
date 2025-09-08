@@ -118,19 +118,21 @@
 
          .sidebar-user {
         display: flex;
-        align-items: center;
-        gap: 0.6rem;
-        margin-top: 1rem;
-        }
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  cursor: pointer;
+         }
 
-        .sidebar-avatar {
-        width: 15%;
-        height: 25%;
-        border-radius: 50%;
-        object-fit: cover;
-        border: 2px solid #ddd;
+        .image-sidebar-avatar {
+       width: 15%;
+  height: 25%;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid #ddd;
+  transition: all 0.3s ease;
+  position: relative;
         }
-
         .sidebar-username {
         font-weight: bold;
         font-size: 1.2rem;
