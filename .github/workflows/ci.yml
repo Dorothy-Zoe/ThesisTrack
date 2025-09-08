@@ -36,27 +36,21 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
 
-      - name: Wait for MySQL
+      - name: Wait for MySQL to be ready
         run: |
-          echo "Waiting for MySQL to be ready..."
           for i in {30..0}; do
-            if mysql -h 127.0.0.1 -uroot -proot -e "SELECT 1;" &> /dev/null; then
+            if mysqladmin ping -h127.0.0.1 -uroot -proot --silent; then
               break
             fi
-            echo "Waiting..."
+            echo 'Waiting for MySQL...'
             sleep 1
           done
 
-      - name: Set up test database
+      - name: Setup test database
         run: |
           mysql -h 127.0.0.1 -uroot -proot -e "DROP DATABASE IF EXISTS thesis_track_test;"
-          mysql -h 127.0.0.1 -uroot -proot -e "CREATE DATABASE thesis_track_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+          mysql -h 127.0.0.1 -uroot -proot -e "CREATE DATABASE thesis_track_test CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
           mysql -h 127.0.0.1 -uroot -proot thesis_track_test < db/thesis_track_test.sql
 
       - name: Run PHPUnit tests
-        env:
-          DB_HOST: 127.0.0.1
-          DB_NAME: thesis_track_test
-          DB_USER: root
-          DB_PASS: root
         run: php vendor/bin/phpunit --configuration phpunit.xml
