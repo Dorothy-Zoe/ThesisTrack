@@ -44,11 +44,15 @@ jobs:
             mysqladmin ping -h 127.0.0.1 -uroot -proot > /dev/null 2>&1 && break
             sleep 2
           done
+          # Additional delay to ensure MySQL is fully ready
+          sleep 3
 
       - name: Import test database
         env:
           MYSQL_PWD: root
-        run: mysql -h 127.0.0.1 -uroot thesis_track_test < db/thesis_track_test.sql
+        run: |
+          mysql -h 127.0.0.1 -uroot -e "CREATE DATABASE IF NOT EXISTS thesis_track_test;"
+          mysql -h 127.0.0.1 -uroot thesis_track_test < db/thesis_track_test.sql
 
       - name: Run PHPUnit tests
         run: php vendor/bin/phpunit --configuration phpunit.xml
