@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       mysql:
-        image: mysql:8.0
+        image: mysql:8
         env:
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: thesis_track_test
@@ -36,14 +36,6 @@ jobs:
 
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
-
-      - name: Wait for MySQL
-        run: |
-          echo "Waiting for MySQL to be ready..."
-          for i in {30..0}; do
-            mysqladmin ping -h 127.0.0.1 -uroot -proot >/dev/null 2>&1 && break
-            sleep 1
-          done
 
       - name: Import test database
         run: mysql -h 127.0.0.1 -uroot -proot thesis_track_test < db/thesis_track_test.sql
