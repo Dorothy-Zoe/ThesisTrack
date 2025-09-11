@@ -220,73 +220,39 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
                     <p style="margin-bottom: 2rem; color: #4a5568;">Upload each chapter individually for evaluation and advisor review.</p>
 
                     <div class="chapter-uploads">
-                        <?php
-                        $chapterData = [
-                            1 => ['title' => 'Introduction', 'status' => 'completed', 'file' => 'Chapter1_Introduction.pdf', 'score' => 92, 'issues' => '✅ Structure complete, citations formatted correctly'],
-                            2 => ['title' => 'Review of Related Literature', 'status' => 'completed', 'file' => 'Chapter2_Literature.pdf', 'score' => 88, 'issues' => '⚠️ Consider adding 3-5 more recent sources (2022-2024)'],
-                            3 => ['title' => 'Methodology', 'status' => 'in-progress', 'file' => 'Chapter3_Methodology.pdf', 'score' => 75, 'issues' => '⚠️ Missing data collection timeline, unclear sampling method'],
-                            4 => ['title' => 'Results and Discussion', 'status' => 'pending', 'file' => null, 'score' => null, 'issues' => null],
-                            5 => ['title' => 'Summary, Conclusion, and Recommendation', 'status' => 'pending', 'file' => null, 'score' => null, 'issues' => null],
-                        ];
+    <?php
+    $chapterTitles = [
+        1 => "Introduction",
+        2 => "Review of Related Literature",
+        3 => "Methodology",
+        4 => "Results and Discussion",
+        5 => "Summary, Conclusion, and Recommendation"
+    ];
 
-                        foreach ($chapterData as $chapterNum => $data):
-                            $currentChapterStatus = 'pending'; // Default status
-                            $currentChapterFile = null;
-                            $currentChapterScore = null;
-                            $currentChapterFeedback = null;
+    foreach ($chapterTitles as $chapterNum => $title): ?>
+        <div class="chapter-card">
+            <div class="chapter-header">
+                <div class="chapter-title">Chapter <?php echo $chapterNum; ?>: <?php echo htmlspecialchars($title); ?></div>
+            </div>
 
-                            // Override with actual data from DB if available
-                            foreach ($chapters as $dbChapter) {
-                                if ($dbChapter['chapter_number'] == $chapterNum) {
-                                    $currentChapterStatus = $dbChapter['status'];
-                                    $currentChapterFile = $dbChapter['file_path']; // Assuming file_path stores the filename
-                                    $currentChapterScore = $dbChapter['score'];
-                                    $currentChapterFeedback = $dbChapter['feedback'];
-                                    break;
-                                }
-                            }
-
-                            // Use mock AI validation data if no real feedback/score
-                            $displayScore = $currentChapterScore ?? $data['score'];
-                            $displayIssues = $currentChapterFeedback ?? $data['issues'];
-                            $displayFile = $currentChapterFile ?? $data['file'];
-                        ?>
-                            <div class="chapter-card">
-                                <div class="chapter-header">
-                                    <div class="chapter-title">Chapter <?php echo $chapterNum; ?>: <?php echo htmlspecialchars($data['title']); ?></div>
-                                    <div class="chapter-status status <?php echo htmlspecialchars($currentChapterStatus); ?>"><?php echo htmlspecialchars(ucfirst(str_replace('_', ' ', $currentChapterStatus))); ?></div>
-                                </div>
-                               <div class="upload-area" onclick="triggerFileUpload('chapter<?php echo $chapterNum; ?>')">
-                                    <div class="upload-icon">
-                                        <?php if ($displayFile): ?>
-                                            <i class="fas fa-file-alt"></i> 
-                                        <?php else: ?>
-                                            <i class="fas fa-folder-open"></i> 
-                                        <?php endif; ?>
-                                    </div>
-                                    <p><?php echo $displayFile ? htmlspecialchars($displayFile) : 'Click to upload or drag and drop'; ?></p>
-                                    <input type="file" id="chapter<?php echo $chapterNum; ?>" accept=".pdf,.doc,.docx">
-                                    </div>
-
-                                <?php if ($displayScore !== null || $displayIssues !== null): ?>
-                                    <div class="ai-validation">
-                                        <?php if ($displayScore !== null): ?>
-                                            <div class="validation-score">
-                                                <span>Evaluation Score:</span>
-                                                <span class="score-badge" style="<?php echo ($displayScore < 80 && $displayScore >= 60) ? 'background: #ed8936;' : (($displayScore < 60) ? 'background: #f56565;' : ''); ?>"><?php echo htmlspecialchars($displayScore); ?>%</span>
-                                            </div>
-                                        <?php endif; ?>
-                                        <?php if ($displayIssues !== null): ?>
-                                            <div class="validation-issues">
-                                                <?php echo htmlspecialchars($displayIssues); ?>
-                                            </div>
-                                        <?php endif; ?>
-                                        <button class="btn-secondary btn-small" onclick="viewValidationReport('chapter<?php echo $chapterNum; ?>')">View Report</button>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                        <?php endforeach; ?>
+            <!-- Upload Form -->
+            <form id="uploadForm<?php echo $chapterNum; ?>" enctype="multipart/form-data">
+                <div class="upload-area" onclick="triggerFileUpload('chapter<?php echo $chapterNum; ?>')">
+                    <div class="upload-icon">
+                        <i class="fas fa-folder-open"></i>
                     </div>
+                    <p>Click to upload or drag and drop</p>
+                    <input type="file" name="pdf" id="chapter<?php echo $chapterNum; ?>" accept=".pdf"
+                           onchange="uploadChapter('<?php echo $chapterNum; ?>')">
+                </div>
+            </form>
+
+            <!-- AI Analysis Results -->
+            <div id="result<?php echo $chapterNum; ?>" class="analysis-result"></div>
+        </div>
+    <?php endforeach; ?>
+</div>
+
                 </div>
             </div>
 

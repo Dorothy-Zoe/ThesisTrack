@@ -1,3 +1,8 @@
+
+function triggerFileUpload(inputId) {
+    document.getElementById(inputId).click();
+}
+
 // student 
 document.addEventListener("DOMContentLoaded", function() {
     // Initialize tab system with single-click functionality
@@ -233,3 +238,81 @@ window.addEventListener("resize", function() {
         sidebar.classList.remove("open");
     }
 });
+
+// Call Flask API when a PDF is uploaded
+function uploadChapter(chapterId) {
+    let fileInput = document.getElementById("chapter" + chapterId);
+    if (!fileInput.files.length) return;
+
+    let formData = new FormData();
+    formData.append("pdf", fileInput.files[0]);
+
+    document.getElementById("result" + chapterId).innerHTML = "⏳ Analyzing... please wait.";
+
+    fetch("http://127.0.0.1:5000/analyze", {
+        method: "POST",
+        body: formData
+    })
+    .then(async res => {
+        let text = await res.text();  // get raw text first
+        try {
+            return JSON.parse(text);   // try parsing JSON
+        } catch {
+            throw new Error("Invalid JSON from server: " + text);
+        }
+    })
+    .then(data => {
+        if (data.error) {
+            document.getElementById("result" + chapterId).innerHTML = "⚠️ Server error: " + data.error;
+            return;
+        }
+
+        let output = `
+            <h4>📑 Completeness</h4>
+            <p><b>Present:</b> ${data.completeness.present.join(", ")}</p>
+            <p><b>Missing:</b> ${data.completeness.missing.join(", ")}</p>
+            <h4>🔍 Section Analysis</h4>
+        `;
+
+        data.sections.forEach(sec => {
+            let highlightedContent = sec.content_snippet;
+
+            // ✅ Highlight grammar corrections if available
+            if (sec.grammar_corrections && sec.grammar_corrections.length > 0) {
+                sec.grammar_corrections.forEach(g => {
+                    if (g.error) {
+                        const regex = new RegExp(g.error, "gi");
+                        highlightedContent = highlightedContent.replace(
+                            regex,
+                            `<span style="background:#ffcccc; text-decoration:line-through;">${g.error}</span>
+                             <span style="background:#ccffcc;">${g.suggestion}</span>`
+                        );
+                    }
+                });
+            }
+
+            output += `
+                <div>
+                    <b>${sec.section}</b><br>
+                    Summary: ${sec.summary}<br>
+                    AI Estimate: ${sec.ai_percent}%<br>
+                    Header Relevance: ${sec.relevance_header}<br>
+                    Overall Relevance: ${sec.relevance_overall}<br>
+                    ${sec.irrelevant_snippet ? "❌ Irrelevant snippet: " + sec.irrelevant_snippet + "<br>" : ""}
+                    
+                    <div style="margin-top:10px; padding:8px; border:1px solid #ddd; background:#fafafa;">
+                        <b>📖 Content Preview:</b><br>${highlightedContent}
+                    </div>
+                </div><hr>
+            `;
+        });
+
+        output += `<h4>🤖 Overall AI Detection</h4><p>${data.overall_ai_percent}%</p>`;
+
+        document.getElementById("result" + chapterId).innerHTML = output;
+    })
+    .catch(err => {
+        console.error("Error:", err);
+        document.getElementById("result" + chapterId).innerHTML = "⚠️ Error analyzing PDF: " + err.message;
+    });
+}

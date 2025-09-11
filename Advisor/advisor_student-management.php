@@ -58,6 +58,181 @@ try {
     $available_sections = [];
 }
 
+// ================== CSV IMPORT/EXPORT FUNCTIONALITY ================== //
+
+// Handle CSV export (template or data)
+if (isset($_GET['action']) && $_GET['action'] === 'export_csv') {
+    $type = $_GET['type'] ?? 'template';
+    
+    if ($type === 'template') {
+        // Generate CSV template for import
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=student_import_template.csv');
+        
+        $output = fopen('php://output', 'w');
+        fputcsv($output, ['first_name', 'last_name', 'middle_name', 'email', 'section']);
+        fclose($output);
+        exit();
+    } elseif ($type === 'data') {
+        // Export current student data
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=student_data_export.csv');
+        
+        $output = fopen('php://output', 'w');
+        fputcsv($output, ['student_id', 'first_name', 'last_name', 'middle_name', 'email', 'section', 'status', 'group_assignment']);
+        
+        try {
+            $stmt = $pdo->prepare("
+                SELECT s.student_id, s.first_name, s.last_name, s.middle_name, s.email, s.section, s.status,
+                       GROUP_CONCAT(g.title SEPARATOR ', ') as group_title
+                FROM students s
+                LEFT JOIN group_members gm ON s.id = gm.student_id
+                LEFT JOIN groups g ON gm.group_id = g.id
+                WHERE s.advisor_id = ?
+                GROUP BY s.id
+                ORDER BY s.last_name, s.first_name
+            ");
+            $stmt->execute([$advisor_id]);
+            
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                fputcsv($output, [
+                    $row['student_id'],
+                    $row['first_name'],
+                    $row['last_name'],
+                    $row['middle_name'] ?? '',
+                    $row['email'],
+                    $row['section'],
+                    $row['status'],
+                    $row['group_title'] ?? 'Not Assigned'
+                ]);
+            }
+        } catch (PDOException $e) {
+            // Log error but continue with empty export
+            error_log("Export error: " . $e->getMessage());
+        }
+        
+        fclose($output);
+        exit();
+    }
+}
+
+// Handle CSV import
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'import_csv') {
+    header('Content-Type: application/json');
+    
+    if (!$advisor_section || !$advisor_course) {
+        echo json_encode(['success' => false, 'message' => 'You must be assigned to a section and course.']);
+        exit();
+    }
+    
+    if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['success' => false, 'message' => 'Please select a valid CSV file.']);
+        exit();
+    }
+    
+    $file = $_FILES['csv_file']['tmp_name'];
+    $handle = fopen($file, 'r');
+    
+    if (!$handle) {
+        echo json_encode(['success' => false, 'message' => 'Failed to open the uploaded file.']);
+        exit();
+    }
+    
+    // Skip header row
+    $header = fgetcsv($handle);
+    
+    $imported = 0;
+    $errors = [];
+    $line = 1;
+    
+    while (($data = fgetcsv($handle)) !== FALSE) {
+        $line++;
+        
+        // Validate required fields
+        if (count($data) < 5) {
+            $errors[] = "Line $line: Insufficient data columns (need: first_name, last_name, middle_name, email, section)";
+            continue;
+        }
+        
+        $first_name = sanitize(trim($data[0]));
+        $last_name = sanitize(trim($data[1]));
+        $middle_name = sanitize(trim($data[2] ?? ''));
+        $email = sanitize(trim($data[3]));
+        $section = sanitize(trim($data[4]));
+        
+        // Validate required fields
+        if (empty($first_name) || empty($last_name) || empty($email) || empty($section)) {
+            $errors[] = "Line $line: Missing required fields (first name, last name, email, or section)";
+            continue;
+        }
+        
+        // Validate email format
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $errors[] = "Line $line: Invalid email format '$email'";
+            continue;
+        }
+        
+        // Validate section is in available sections
+        if (!in_array($section, $available_sections)) {
+            $errors[] = "Line $line: Invalid section '$section'. Must be one of: " . implode(', ', $available_sections);
+            continue;
+        }
+        
+        try {
+            // Check if student already exists by email
+            $check_stmt = $pdo->prepare("SELECT id FROM students WHERE email = ?");
+            $check_stmt->execute([$email]);
+            
+            if ($check_stmt->fetch()) {
+                $errors[] = "Line $line: Student with email '$email' already exists";
+                continue;
+            }
+            
+            // Generate student ID
+            $year = date('Y');
+            $count_stmt = $pdo->prepare("SELECT COUNT(*) as count FROM students WHERE course = ?");
+            $count_stmt->execute([$advisor_course]);
+            $count = $count_stmt->fetch()['count'];
+            $student_id = $year . '-' . $advisor_course . '-' . str_pad($count + 1, 4, '0', STR_PAD_LEFT);
+            
+            // Fixed default password
+            $temp_password = 'student1234';
+            $hashed_password = password_hash($temp_password, PASSWORD_DEFAULT);
+            
+            // Insert student
+            $insert_stmt = $pdo->prepare("
+                INSERT INTO students 
+                (first_name, middle_name, last_name, email, password, student_id, year_level, section, course, status, profile_picture, advisor_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 3, ?, ?, 'active', '', ?, NOW())
+            ");
+            
+            $insert_stmt->execute([
+                $first_name, $middle_name, $last_name, $email, $hashed_password,
+                $student_id, $section, $advisor_course, $advisor_id
+            ]);
+            
+            $imported++;
+            
+        } catch (PDOException $e) {
+            $errors[] = "Line $line: Database error - " . $e->getMessage();
+        }
+    }
+    
+    fclose($handle);
+    
+    if ($imported > 0) {
+        $message = "Successfully imported $imported students.";
+        if (!empty($errors)) {
+            $message .= " " . count($errors) . " errors occurred.";
+        }
+        echo json_encode(['success' => true, 'message' => $message, 'errors' => $errors]);
+    } else {
+        echo json_encode(['success' => false, 'message' => 'No students were imported.', 'errors' => $errors]);
+    }
+    
+    exit();
+}
+
 // ================== version 7 update here  ================== //
 
 function getSortArrows($current_col, $sort_col, $sort_order) {
@@ -99,35 +274,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $first_name = sanitize($_POST['first_name']);
             $middle_name = sanitize($_POST['middle_name'] ?? '');
             $last_name = sanitize($_POST['last_name']);
+            $email = sanitize($_POST['email'] ?? '');
             $section = sanitize($_POST['section'] ?? '');
 
-            if (empty($first_name) || empty($last_name) || empty($section)) {
-                echo json_encode(['success' => false, 'message' => 'First name, last name, and section are required.']);
+            if (empty($first_name) || empty($last_name) || empty($email) || empty($section)) {
+                echo json_encode(['success' => false, 'message' => 'First name, last name, email, and section are required.']);
+                exit();
+            }
+            
+            // Validate email format
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                echo json_encode(['success' => false, 'message' => 'Invalid email format.']);
                 exit();
             }
 
             try {
+                // Check if email already exists
+                $stmt = $pdo->prepare("SELECT id FROM students WHERE email = ?");
+                $stmt->execute([$email]);
+                if ($stmt->fetch()) {
+                    echo json_encode(['success' => false, 'message' => 'Email already exists.']);
+                    exit();
+                }
+                
                 $year = date('Y');
                 $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM students WHERE course = ?");
                 $stmt->execute([$advisor_course]);
                 $count = $stmt->fetch()['count'];
                 $student_id = $year . '-' . $advisor_course . '-' . str_pad($count + 1, 4, '0', STR_PAD_LEFT);
 
-                $email_name = strtolower(str_replace(' ', '.', $first_name . '.' . $last_name));
-                $email = $email_name . '@student.cict.edu';
-
-                $stmt = $pdo->prepare("SELECT id FROM students WHERE email = ?");
-                $stmt->execute([$email]);
-                if ($stmt->fetch()) {
-                    $counter = 1;
-                    do {
-                        $email = $email_name . $counter . '@student.cict.edu';
-                        $stmt->execute([$email]);
-                        $counter++;
-                    } while ($stmt->fetch());
-                }
-
-                $temp_password = 'student' . rand(1000, 9999);
+                // Fixed default password
+                $temp_password = 'student1234';
                 $hashed_password = password_hash($temp_password, PASSWORD_DEFAULT);
 
                 $stmt = $pdo->prepare("
@@ -160,20 +337,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $first_name = sanitize($_POST['first_name']);
             $middle_name = sanitize($_POST['middle_name'] ?? '');
             $last_name = sanitize($_POST['last_name']);
+            $email = sanitize($_POST['email'] ?? '');
             $section = sanitize($_POST['section'] ?? '');
 
-            if (empty($first_name) || empty($last_name) || empty($section)) {
-                echo json_encode(['success' => false, 'message' => 'First name, last name, and section are required.']);
+            if (empty($first_name) || empty($last_name) || empty($email) || empty($section)) {
+                echo json_encode(['success' => false, 'message' => 'First name, last name, email, and section are required.']);
+                exit();
+            }
+            
+            // Validate email format
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                echo json_encode(['success' => false, 'message' => 'Invalid email format.']);
                 exit();
             }
 
             try {
+                // Check if email already exists for another student
+                $stmt = $pdo->prepare("SELECT id FROM students WHERE email = ? AND id != ?");
+                $stmt->execute([$email, $student_id]);
+                if ($stmt->fetch()) {
+                    echo json_encode(['success' => false, 'message' => 'Email already exists for another student.']);
+                    exit();
+                }
+
                 $stmt = $pdo->prepare("
                     UPDATE students 
-                    SET first_name = ?, middle_name = ?, last_name = ?, section = ?
+                    SET first_name = ?, middle_name = ?, last_name = ?, email = ?, section = ?
                     WHERE id = ? AND advisor_id = ?
                 ");
-                $stmt->execute([$first_name, $middle_name, $last_name, $section, $student_id, $advisor_id]);
+                $stmt->execute([$first_name, $middle_name, $last_name, $email, $section, $student_id, $advisor_id]);
 
                 if ($stmt->rowCount() > 0) {
                     echo json_encode(['success' => true, 'message' => 'Student updated successfully!']);
@@ -260,8 +452,6 @@ try {
 
 ?>
 
-
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -271,6 +461,7 @@ try {
     <link rel="stylesheet" href="../CSS/advisor_student-management.css">
     <script src="https://kit.fontawesome.com/4ef2a0fa98.js" crossorigin="anonymous"></script>
     <title>ThesisTrack</title>
+    
 </head>
 <body>
     <div class="app-container">
@@ -384,9 +575,21 @@ try {
                         </div>
                     <?php else: ?>
                         <div class="action-section">
-                            <button class="btn-primary" onclick="addNewStudent()" <?php echo !$advisor_section ? 'disabled' : ''; ?>>
-                                <i class="fas fa-plus"></i> Add New Student
-                            </button>
+                           
+                            
+                            <!-- CSV Import/Export Buttons -->
+                            <div class="csv-buttons">
+                                <button class="btn-secondary" onclick="exportCSV('template')">
+                                    <i class="fas fa-download"></i> Download Template
+                                </button>
+                                <button class="btn-secondary" onclick="showImportModal()">
+                                    <i class="fas fa-upload"></i> Import CSV
+                                </button>
+                                <button class="btn-secondary" onclick="exportCSV('data')">
+                                    <i class="fas fa-file-export"></i> Export Data
+                                </button>
+                            </div>
+                            
                             <div class="section-info">
                                 <span class="info-badge">Section: <?php echo htmlspecialchars($advisor_section); ?></span>
                                 <span class="info-badge">Course: <?php echo htmlspecialchars($advisor_course); ?></span>
@@ -552,105 +755,60 @@ try {
         </div>
     </div>
 
-    <!-- Add/Edit Student Modal -->
-    <div id="studentModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 id="studentModalTitle">Add New Student</h3>
-                <span class="close" onclick="closeStudentModal()">&times;</span>
-            </div>
-            <div class="modal-body">
-                <form id="studentForm">
-                    <input type="hidden" id="studentId" name="student_id">
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label for="firstName">First Name *</label>
-                            <input type="text" id="firstName" name="first_name" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="lastName">Last Name *</label>
-                            <input type="text" id="lastName" name="last_name" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="middleName">Middle Name</label>
-                            <input type="text" id="middleName" name="middle_name">
-                        </div>
-                        <div class="form-group">
-                            <label>Section *</label>
-                            <div class="form-group">
-
-                            <select name="section" id="sectionSelect" required>
-                                <option value="">Select Section</option>
-                                <?php foreach ($available_sections as $section): ?>
-                                    <option value="<?= htmlspecialchars($section) ?>"><?= htmlspecialchars($section) ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-
-                        </div>
+    
+<!-- Student Edit Modal -->
+<div id="studentModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="studentModalTitle">Edit Student</h3>
+            <span class="close" onclick="closeStudentModal()">&times;</span>
+        </div>
+        <div class="modal-body">
+            <form id="studentForm">
+                <input type="hidden" id="studentId" name="student_id">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="firstName">First Name *</label>
+                        <input type="text" id="firstName" name="first_name" required>
                     </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-primary" onclick="saveStudent()">
-                    <i class="fas fa-save"></i> Save Student
-                </button>
-                <button class="btn-secondary" onclick="closeStudentModal()">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
-            </div>
+                    <div class="form-group">
+                        <label for="middleName">Middle Name</label>
+                        <input type="text" id="middleName" name="middle_name">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="lastName">Last Name *</label>
+                        <input type="text" id="lastName" name="last_name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="email">Email *</label>
+                        <input type="email" id="email" name="email" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="section">Section *</label>
+                    <select id="section" name="section" required>
+                        <option value="">Select Section</option>
+                        <?php foreach ($available_sections as $section): ?>
+                            <option value="<?php echo htmlspecialchars($section); ?>"><?php echo htmlspecialchars($section); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-primary" onclick="saveStudent()">
+                <i class="fas fa-save"></i> Save Changes
+            </button>
+            <button class="btn-secondary" onclick="closeStudentModal()">
+                Cancel
+            </button>
         </div>
     </div>
+</div>
 
-    <!-- Student Credentials Modal -->
-    <div id="credentialsModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3><i class="fas fa-check-circle text-success"></i> Student Account Created!</h3>
-                <span class="close" onclick="closeCredentialsModal()">&times;</span>
-            </div>
-            <div class="modal-body">
-                <div class="success-message">
-                    <i class="fas fa-graduation-cap"></i>
-                    <p>The student account has been created successfully!</p>
-                </div>
-                
-                <div class="credentials-box">
-                    <h4><i class="fas fa-key"></i> Login Credentials</h4>
-                    <div class="credential-item">
-                        <label>Student Name:</label>
-                        <span id="credentialName"></span>
-                    </div>
-                    <div class="credential-item">
-                        <label>Student ID:</label>
-                        <span id="credentialStudentId"></span>
-                    </div>
-                    <div class="credential-item">
-                        <label>Email:</label>
-                        <span id="credentialEmail"></span>
-                    </div>
-                    <div class="credential-item">
-                        <label>Temporary Password:</label>
-                        <span id="credentialPassword" class="password-highlight"></span>
-                    </div>
-                </div>
-                
-                <div class="alert alert-info">
-                    <i class="fas fa-info-circle"></i>
-                    <strong>Important:</strong> Please share these credentials with the student. They will be required to change their password on first login.
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-secondary" onclick="copyCredentials()">
-                    <i class="fas fa-copy"></i> Copy Credentials
-                </button>
-                <button class="btn-primary" onclick="closeCredentialsModal()">
-                    <i class="fas fa-check"></i> Got it
-                </button>
-            </div>
-        </div>
-    </div>
-
+   
    <!-- Confirmation Modal -->
     <div id="confirmModal" class="modal">
         <div class="modal-content">
@@ -672,6 +830,49 @@ try {
         </div>
     </div>
 
+    <!-- CSV Import Modal -->
+    <div id="importModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Import Students from CSV</h3>
+                <span class="close" onclick="closeImportModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="import-instructions">
+                    <p><strong>CSV Format Requirements:</strong></p>
+                    <ul>
+                        <li>File is in CSV format</li>
+                        <li>Sections must be one of: <?php echo implode(', ', $available_sections); ?></li>
+                        
+                    </ul>
+                    <p><a href="javascript:void(0)" onclick="exportCSV('template')">Download template</a></p>
+                </div>
+                
+                <form id="importForm" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label for="csvFile">Select CSV File</label>
+                        <input type="file" id="csvFile" name="csv_file" accept=".csv" required>
+                    </div>
+                </form>
+                
+                <div id="importResults" style="display: none;">
+                    <h4>Import Results</h4>
+                    <div id="importSuccess" class="alert alert-success"></div>
+                    <div id="importErrors" class="alert alert-error"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-primary" onclick="submitImport()">
+                    <i class="fas fa-upload"></i> Import
+                </button>
+                <button class="btn-secondary" onclick="closeImportModal()">
+                  Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script src="../JS/advisor_student-management.js"></script>
+  
 </body>
 </html>
