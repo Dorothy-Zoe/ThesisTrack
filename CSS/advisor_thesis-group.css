@@ -1279,7 +1279,7 @@ th a {
     gap: 8px;
     font-size: 14px;
     color: #4a5568;
-    margin-top: 0.50rem;
+    margin-bottom: -2.5%;
 }
 
 .entries-select {
@@ -1359,7 +1359,7 @@ th a {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1.5rem;
+    margin-bottom: 2.5rem;
     padding: 0.5rem 0;
 }
 

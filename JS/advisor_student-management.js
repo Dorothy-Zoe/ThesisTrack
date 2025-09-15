@@ -536,7 +536,7 @@ window.showConfirmModal = showConfirmModal;
 // ===============  Start of version 6 update =============== 
 
 document.addEventListener('DOMContentLoaded', function() {
-    const searchInput = document.querySelector('.search-input');
+    // const searchInput = document.querySelector('.search-input');
     const table = document.getElementById('groupsTable');
     
     // Function to filter table rows

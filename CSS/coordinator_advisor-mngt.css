@@ -1169,20 +1169,19 @@ th.sortable:hover {
 
 /* Search container styles */
 .search-container {
-  position: absolute;
-  right:65px;
-  padding: 0.5rem 1rem 0.5rem 2rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 0.360rem;
-  background-color: #f8fafc;
-  transition: all 0.2s ease;
-  width: 250px; 
-  font-size: 0.875rem;
-  color: #4a5568;
-  display: flex;
-  align-items: center;
- 
-}
+    position: absolute;
+    right: 10%;
+    padding: 0.5rem 1rem 0.5rem 2rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.360rem;
+    background-color: #f8fafc;
+    transition: all 0.2s ease;
+    width: 15%;
+    font-size: 0.875rem;
+    color: #4a5568;
+    display: flex;
+    align-items: center;
+ }
 
 /* Search icon */
 .search-container i {

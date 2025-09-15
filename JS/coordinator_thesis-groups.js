@@ -304,4 +304,4 @@ document.querySelector('.search-input').addEventListener('keyup', function(e) {
   
 });
 
-// =============== End of version 7 update =============== 
+// =============== End of version 7 update ===============

@@ -121,48 +121,50 @@ try {
     $pdo->beginTransaction();
 
     try {
-        // Check if chapter already exists
-        $checkStmt = $pdo->prepare("SELECT id FROM chapters WHERE group_id = ? AND chapter_number = ?");
+        // START of Version 9 changes
+        // version 9 : Changed logic to maintain upload history instead of overwriting previous uploads
+        
+        // Check if chapter already exists and mark old versions as not current
+        $checkStmt = $pdo->prepare("SELECT id, file_path FROM chapters WHERE group_id = ? AND chapter_number = ? AND is_current = 1");
         $checkStmt->execute([$group_id, $chapter_number]);
         $existingChapter = $checkStmt->fetch();
 
+        $version = 1; // Default version for new chapters
+        
         if ($existingChapter) {
-            // Delete old file if exists
-            $oldFileStmt = $pdo->prepare("SELECT file_path FROM chapters WHERE id = ?");
-            $oldFileStmt->execute([$existingChapter['id']]);
-            $oldFile = $oldFileStmt->fetch();
+            // Get the highest version number for this chapter
+            $versionStmt = $pdo->prepare("SELECT MAX(version) as max_version FROM chapters WHERE group_id = ? AND chapter_number = ?");
+            $versionStmt->execute([$group_id, $chapter_number]);
+            $versionResult = $versionStmt->fetch();
+            $version = ($versionResult['max_version'] ?? 0) + 1;
             
-            if ($oldFile && $oldFile['file_path']) {
-                $old_file_path = dirname(__DIR__) . '/' . $oldFile['file_path'];
-                if (file_exists($old_file_path)) {
-                    unlink($old_file_path);
-                }
-            }
-
-            // Update existing chapter
-            $updateStmt = $pdo->prepare("UPDATE chapters SET filename = ?, original_filename = ?, file_path = ?, file_size = ?, file_type = ?, status = 'pending', upload_date = NOW(), updated_at = NOW() WHERE id = ?");
-            $updateStmt->execute([
-                $filename, 
-                $original_filename, 
-                'uploads/chapters/' . $filename, 
-                $file['size'], 
-                $file['type'], 
-                $existingChapter['id']
-            ]);
-        } else {
-            // Insert new chapter
-            $insertStmt = $pdo->prepare("INSERT INTO chapters (group_id, chapter_number, chapter_name, filename, original_filename, file_path, file_size, file_type, status, upload_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())");
-            $insertStmt->execute([
-                $group_id, 
-                $chapter_number, 
-                $chapter_name, 
-                $filename, 
-                $original_filename, 
-                'uploads/chapters/' . $filename, 
-                $file['size'], 
-                $file['type']
-            ]);
+            // Mark existing current chapter as not current
+            $updateCurrentStmt = $pdo->prepare("UPDATE chapters SET is_current = 0 WHERE id = ?");
+            $updateCurrentStmt->execute([$existingChapter['id']]);
         }
+
+        // Insert new chapter version (always insert, never update to maintain history)
+        $insertStmt = $pdo->prepare("INSERT INTO chapters (group_id, chapter_number, version, chapter_name, filename, original_filename, file_path, file_size, file_type, status, is_current, upload_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'uploaded', 1, NOW())");
+        $insertStmt->execute([
+            $group_id, 
+            $chapter_number,
+            $version,
+            $chapter_name, 
+            $filename, 
+            $original_filename, 
+            'uploads/chapters/' . $filename, 
+            $file['size'], 
+            $file['type']
+        ]);
+
+        $newChapterId = $pdo->lastInsertId();
+        
+        // If there was a previous version, link it
+        if ($existingChapter) {
+            $linkStmt = $pdo->prepare("UPDATE chapters SET replaced_by = ? WHERE id = ?");
+            $linkStmt->execute([$newChapterId, $existingChapter['id']]);
+        }
+        // END of Version 9 changes
 
         $pdo->commit();
 
@@ -171,6 +173,7 @@ try {
             'message' => 'Chapter uploaded successfully',
             'filename' => $original_filename,
             'chapter_name' => $chapter_name,
+            'version' => $version, // version 9 : Added version info to response
             'file_path' => 'uploads/chapters/' . $filename,
             'download_url' => '../uploads/chapters/' . $filename
         ]);

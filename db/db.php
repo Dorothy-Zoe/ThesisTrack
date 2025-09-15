@@ -17,10 +17,19 @@ try {
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
     $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
     
+    $pdo->query('SELECT 1');
+    
 } catch (PDOException $e) {
     // Log error and show user-friendly message
     error_log("Database connection failed: " . $e->getMessage());
-    die("Database connection failed. Please try again later.");
+    
+    if (strpos($e->getMessage(), 'Access denied') !== false) {
+        die("Database access denied. Please check username and password.");
+    } elseif (strpos($e->getMessage(), 'Unknown database') !== false) {
+        die("Database 'thesis_track' not found. Please create the database first.");
+    } else {
+        die("Database connection failed: " . $e->getMessage());
+    }
 }
 
 /**

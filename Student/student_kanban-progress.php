@@ -71,14 +71,30 @@ if ($userGroup && isset($pdo)) {
 // Get chapters for the group
 $chapters = [];
 if ($userGroup && isset($pdo)) {
+    // START of Version 9 changes
+    // version 9 : Updated query to only fetch current chapter versions for kanban display
     $chaptersQuery = $pdo->prepare("
-        SELECT * FROM chapters
-        WHERE group_id = ?
+        SELECT *, 
+               (SELECT COUNT(*) FROM chapters c2 WHERE c2.group_id = chapters.group_id AND c2.chapter_number = chapters.chapter_number) as total_versions
+        FROM chapters
+        WHERE group_id = ? AND is_current = 1
         ORDER BY chapter_number
     ");
+    // END of Version 9 changes
     $chaptersQuery->execute([$userGroup['id']]);
     $chapters = $chaptersQuery->fetchAll(PDO::FETCH_ASSOC);
 }
+
+// START of Version 9 changes
+// version 9 : Added missing chapter names array for kanban board display
+$chapterNames = [
+    1 => 'Introduction',
+    2 => 'Review of Related Literature', 
+    3 => 'Methodology',
+    4 => 'Results and Discussion',
+    5 => 'Summary, Conclusion, and Recommendation'
+];
+// END of Version 9 changes
 
 // Get notifications
 $notifications = [];
@@ -246,10 +262,23 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
                                         'priority_class' => 'low',
                                     ]);
                                     break;
+                                case 'pending': // version 9 : Added pending status handling
                                 case 'in_progress':
                                     $kanbanColumns['in_progress']['chapters'][] = array_merge($cardData, [
                                         'description' => 'Currently being drafted or revised.',
                                         'meta' => 'Last updated: ' . date('M j', strtotime($chapter['updated_at'] ?? $chapter['created_at'])),
+                                        'priority_class' => 'medium',
+                                    ]);
+                                    break;
+                                case 'uploaded': // version 9 : Fixed uploaded status handling with proper enum value
+                                case 'under_review': // version 9 : Added under_review status handling
+                                    $versionText = isset($chapter['total_versions']) && $chapter['total_versions'] > 1 
+                                        ? " (v{$chapter['version']}, {$chapter['total_versions']} uploads)" 
+                                        : " (v{$chapter['version']})";
+                                    $kanbanColumns['under_review']['chapters'][] = array_merge($cardData, [
+                                        'title' => $cardData['title'] . $versionText, // version 9 : Added version info to title
+                                        'description' => 'Chapter uploaded and awaiting advisor review.',
+                                        'meta' => 'Uploaded: ' . date('M j, Y g:i A', strtotime($chapter['upload_date'] ?? $chapter['created_at'])), // version 9 : Enhanced timestamp format
                                         'priority_class' => 'medium',
                                     ]);
                                     break;

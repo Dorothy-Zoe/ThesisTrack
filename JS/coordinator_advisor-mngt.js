@@ -1022,4 +1022,4 @@ window.saveNewSection = saveNewSection;
 window.closeAddSectionModal = closeAddSectionModal;
 
 
-// ===============  End of version 6 update =============== 
+// ===============  End of version 6 update ===============

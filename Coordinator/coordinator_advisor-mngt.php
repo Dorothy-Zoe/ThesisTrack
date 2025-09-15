@@ -1,6 +1,11 @@
 <?php
 session_start();
 require_once '../db/db.php';
+// Add PHPMailer requirement
+require_once '../vendor/autoload.php';  
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
+
 // Optional: Prevent PHP from outputting warnings to the browser
 ini_set('display_errors', 0);
 ini_set('log_errors', 1);
@@ -11,7 +16,6 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'coordinator') {
     header('Location: ../login.php');
     exit();
 }
-
 
 // ==================== V7 UPDATE 
 // In your coordinator session verification code:
@@ -34,7 +38,103 @@ try {
 }
 // =================END OF V7 UPDATE
 
-
+// Function to send email using PHPMailer
+function sendAdvisorCredentials($email, $firstName, $lastName, $employeeId,$section, $tempPassword) {
+    $mail = new PHPMailer(true);
+    
+    try {
+        // Server settings
+        $mail->isSMTP();
+        $mail->Host = 'smtp.gmail.com';
+        $mail->SMTPAuth = true;
+        $mail->Username = 'klarerivera25@gmail.com'; // Your Gmail address
+        $mail->Password = 'bztg uiur xzho wslv'; // Your Gmail app password
+        $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        $mail->Port = 587;
+        
+        // Recipients
+        $mail->setFrom('klarerivera25@gmail.com', 'ThesisTrack System');
+        $mail->addAddress($email, $firstName . ' ' . $lastName);
+        
+        // Content
+        $mail->isHTML(true);
+        $mail->Subject = 'Your ThesisTrack Advisor Account Credentials';
+        
+        $mail->Body = "
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                    .header { background-color: #4a86e8; color: white; padding: 15px; text-align: center; border-radius: 5px 5px 0 0; }
+                    .content { background-color: #f9f9f9; padding: 20px; border-radius: 0 0 5px 5px; }
+                    .credentials { background-color: #fff; padding: 15px; border: 1px solid #ddd; border-radius: 5px; margin: 15px 0; }
+                    .footer { margin-top: 20px; font-size: 12px; color: #777; text-align: center; }
+                    .important { color: #e74c3c; font-weight: bold; }
+                </style>
+            </head>
+            <body>
+                <div class='container'>
+                    <div class='header'>
+                        <h2>ThesisTrack Advisor Account</h2>
+                    </div>
+                    <div class='content'>
+                        <p>Dear $firstName $lastName,</p>
+                        <p>Your advisor account has been successfully created in the ThesisTrack system.</p>
+                        
+                        <div class='credentials'>
+                            <h3>Your Login Credentials:</h3>
+                            <p><strong>Email:</strong> $email</p>
+                            <p><strong>Employee ID:</strong> $employeeId</p>
+                            <p><strong>Assigned Section:</strong> $section</p>
+                            <p><strong>Temporary Password:</strong> $tempPassword</p>
+                        </div>
+                        
+                        <p class='important'>Important: You will be required to change your password upon first login for security purposes.</p>
+                        
+                        <p>You can access the system at: <a href='http://tcu-thesistrack/login.php'>http://tcu-thesistrack/login.php</a></p>
+                        
+                        <p>If you have any questions, please contact the system administrator or the research coordinator.</p>
+                    </div>
+                    <div class='footer'>
+                        <p>This is an automated message. Please do not reply to this email.</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+        ";
+        
+        // Alternative plain text version for non-HTML mail clients
+        $mail->AltBody = "
+            ThesisTrack Advisor Account
+            
+            Dear $firstName $lastName,
+            
+            Your advisor account has been successfully created in the ThesisTrack system.
+            
+            Your Login Credentials:
+            Email: $email
+            Employee ID: $employeeId
+            Assigned Section: $section
+            Temporary Password: $tempPassword
+            
+            Important: You will be required to change your password upon first login for security purposes.
+            
+            You can access the system at: http://tcu-thesistrack.com/login.php
+            
+            If you have any questions, please contact the system administrator or the research coordinator.
+            
+            This is an automated message. Please do not reply to this email.
+        ";
+        
+        $mail->send();
+        return true;
+    } catch (Exception $e) {
+        error_log("Email sending failed: " . $mail->ErrorInfo);
+        return false;
+    }
+}
 
 // === Handle Advisor CRUD ===
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -110,12 +210,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $pdo->commit();
 
+                // Send email with credentials
+                $emailSent = sendAdvisorCredentials($email, $first_name, $last_name, $employeeId, $section,$tempPassword);
+                
+                $emailMessage = $emailSent 
+                    ? " Email with credentials has been sent to the advisor." 
+                    : " Note: Failed to send email with credentials.";
+
                 echo json_encode([
                     'success' => true,
-                    'message' => 'Advisor added successfully!',
+                    'message' => 'Advisor added successfully!' . $emailMessage,
                     'temp_password' => $tempPassword,
                     'employee_id' => $employeeId,
-                    'email' => $email
+                    'email' => $email,
+                    'email_sent' => $emailSent
                 ]);
             } catch (PDOException $e) {
                 $pdo->rollBack();
@@ -124,7 +232,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             exit();
 
-        case 'edit_advisor':
+case 'edit_advisor':
             $id = (int)$_POST['id'];
             $first_name = sanitize($_POST['first_name']);
             $middle_name = sanitize($_POST['middle_name'] ?? '');
@@ -559,7 +667,19 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
                                     <span>entries</span>
                                 </div>
 
-                                
+                                <form class="modern-search" method="GET" action="">
+                                    <div class="search-container">
+                                        <i class="fas fa-search"></i>
+                                        <input type="text" name="search" placeholder="Search here..." class="search-input" 
+                                            value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
+                                        <!-- Preserve other GET parameters -->
+                                        <?php foreach ($_GET as $key => $value): ?>
+                                            <?php if ($key !== 'search' && $key !== 'page'): ?>
+                                                <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </form>
                             </div>
 
                                     <thead>
@@ -827,56 +947,7 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
                     </div>
                 </div>
 
-                <!-- Password Display Modal -->
-                <div id="passwordModal" class="modal">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3><i class="fas fa-check-circle" style="color: #48bb78;"></i> Advisor Account Created Successfully!</h3>
-                            <span class="close" onclick="closePasswordModal()">&times;</span>
-                        </div>
-                        <div class="modal-body">
-                            <div style="text-align: center; margin-bottom: 2rem;">
-                                <i class="fas fa-check-circle" style="font-size: 4rem; color: #48bb78; margin-bottom: 1rem;"></i>
-                                <p style="font-size: 1.2rem;"><strong>The advisor account has been created successfully!</strong></p>
-                            </div>
-                            
-                            <div style="background: linear-gradient(135deg, #f8f9fa, #e9ecef); padding: 2rem; border-radius: 12px; margin: 1rem 0; border-left: 4px solid #48bb78;">
-                                <h4 style="margin-bottom: 1.5rem; color: #2d3748; font-size: 1.25rem;">
-                                    <i class="fas fa-key"></i> Login Credentials:
-                                </h4>
-                                <div style="display: grid; gap: 1rem;">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; background: white; border-radius: 8px;">
-                                        <span style="font-weight: 600;"><i class="fas fa-envelope"></i> Email:</span>
-                                        <span id="createdEmail" style="font-family: 'Courier New', monospace; background: #e2e8f0; padding: 0.5rem; border-radius: 6px; font-weight: 500;"></span>
-                                    </div>
-                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; background: white; border-radius: 8px;">
-                                        <span style="font-weight: 600;"><i class="fas fa-lock"></i> Temporary Password:</span>
-                                        <span id="tempPassword" style="font-family: 'Courier New', monospace; background: #fed7d7; padding: 0.5rem; border-radius: 6px; font-weight: bold; color: #c53030;"></span>
-                                    </div>
-                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; background: white; border-radius: 8px;">
-                                        <span style="font-weight: 600;"><i class="fas fa-id-badge"></i> Employee ID:</span>
-                                        <span id="employeeId" style="font-family: 'Courier New', monospace; background: #e2e8f0; padding: 0.5rem; border-radius: 6px; font-weight: 500;"></span>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div style="background: linear-gradient(135deg, #fef5e7, #fed7aa); padding: 1.5rem; border-radius: 12px; border-left: 4px solid #f59e0b;">
-                                <p style="color: #92400e; font-size: 1rem; margin: 0; line-height: 1.6;">
-                                    <i class="fas fa-exclamation-triangle"></i> 
-                                    <strong>Important:</strong> Please share these credentials with the advisor. They will be required to change their password on first login for security purposes.
-                                </p>
-                            </div>
-                        </div>
-                        <div class="modal-footer">
-                            <button class="btn-secondary" onclick="copyCredentials()">
-                                <i class="fas fa-copy"></i> Copy Credentials
-                            </button>
-                            <button class="btn-primary" onclick="closePasswordModal()">
-                                <i class="fas fa-check"></i> Got it
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                
             </main>
         </div>
     </div>

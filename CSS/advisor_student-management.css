@@ -1062,7 +1062,7 @@ th a {
     gap: 8px;
     font-size: 14px;
     color: #4a5568;
-    
+    margin-bottom: -3%;
 }
 
 .entries-select {
@@ -1084,7 +1084,7 @@ th a {
 .search-wrapper {
     position: relative;
   width: 100%;
-  margin-bottom: 40px;
+  /* margin-bottom: 40px; */
 }
 
 /* Search container styles */

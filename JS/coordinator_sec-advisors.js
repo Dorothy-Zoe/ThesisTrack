@@ -229,6 +229,4 @@ $(document).ready(function() {
     window.viewSectionDetails = viewSectionDetails;
 });
  
-// =============== End of version 6 update =============== 
-
-
+// =============== End of version 6 update ===============
