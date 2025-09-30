@@ -29,8 +29,9 @@
         align-items: center;
         }
 
+        /* ito un */
         .modal-content {
-        background: white;
+        background: rgb(114, 13, 13);
         padding: 2rem;
         border-radius: 8px;
         width: 300px;
