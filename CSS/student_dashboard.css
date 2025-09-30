@@ -31,7 +31,7 @@
 
         /* ito un */
         .modal-content {
-        background: rgb(114, 13, 13);
+        background: white(114, 13, 13);
         padding: 2rem;
         border-radius: 8px;
         width: 300px;
