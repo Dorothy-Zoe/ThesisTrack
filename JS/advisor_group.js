@@ -11,6 +11,7 @@ document.addEventListener("DOMContentLoaded", function() {
     initNavigation();
     initUI();
     initModals();
+    initNotifications();
     
     // Show welcome message
     showMessage("Viewing your supervised groups.", "info");
@@ -74,12 +75,13 @@ function initUI() {
         });
     }
     
-    // Fixed View Details functionality
+    // View Details functionality
     document.querySelectorAll('.btn-expand').forEach(btn => {
         btn.addEventListener('click', function(e) {
-            // Get group ID from data attribute or onclick
-            const groupId = this.getAttribute('data-group-id') || 
-                          this.getAttribute('onclick').match(/'([^']+)'/)[1];
+            e.stopPropagation(); // Prevent the click from bubbling up
+            
+            // Get group ID from onclick attribute
+            const groupId = this.getAttribute('onclick').match(/'([^']+)'/)[1];
             
             // Get the details element
             const details = document.getElementById(`${groupId}-details`);
@@ -98,64 +100,159 @@ function initUI() {
             }
         });
     });
+    
+    // Add click handlers for chapter items to prevent event bubbling
+    document.querySelectorAll('.clickable-chapter').forEach(chapter => {
+        chapter.addEventListener('click', function(e) {
+            e.stopPropagation(); // Prevent click from reaching parent elements
+            window.location.href = 'advisor_reviews.php';
+        });
+    });
 }
 
 function initModals() {
-    // Get all modal elements
-    const logoutBtn = document.getElementById('logoutBtn');
-    const logoutLink = document.getElementById('logoutLink');
-    const logoutModal = document.getElementById('logoutModal'); // Changed to single modal
-    const confirmLogout = document.getElementById('confirmLogout');
-    const cancelLogout = document.getElementById('cancelLogout');
-    
-    // Review modal elements
-    const reviewModal = document.getElementById('reviewModal');
-    const closeModalBtn = document.querySelector('.close');
+    // Logout functionality
+    const logoutBtn = document.getElementById("logoutBtn");
+    const logoutLink = document.getElementById("logoutLink");
+    const logoutModal = document.getElementById("logoutModal");
 
-    // Show logout modal function
-    const showLogoutModal = (e) => {
-        if (e) {
-            e.preventDefault();
+    if (logoutModal) {
+        const showModal = (e) => {
+            if (e) e.preventDefault();
+            logoutModal.classList.add("show");
+        };
+
+        const hideModal = () => {
+            logoutModal.classList.remove("show");
+        };
+
+        if (logoutBtn) logoutBtn.addEventListener("click", showModal);
+        if (logoutLink) logoutLink.addEventListener("click", showModal);
+
+        // Close modal when clicking outside
+        logoutModal.addEventListener("click", (e) => {
+            if (e.target === logoutModal) {
+                hideModal();
+            }
+        });
+
+        // Make closeLogoutModal and confirmLogout globally available
+        window.closeLogoutModal = hideModal;
+        window.confirmLogout = () => {
+            window.location.href = "../logout.php";
+        };
+    }
+}
+
+function initNotifications() {
+    const notificationBtn = document.getElementById('notificationBtn');
+    const notificationMenu = document.getElementById('notificationMenu');
+    const markAllReadBtn = document.getElementById('markAllRead');
+    const notificationList = document.getElementById('notificationList');
+
+    // Toggle notification dropdown
+    if (notificationBtn && notificationMenu) {
+        notificationBtn.addEventListener('click', function(e) {
             e.stopPropagation();
-        }
-        
-        // Hide any other open modals first
-        if (reviewModal) reviewModal.style.display = 'none';
-        
-        // Show logout modal
-        if (logoutModal) logoutModal.style.display = 'flex';
-    };
+            notificationMenu.classList.toggle('show');
+        });
 
-    // Hide logout modal function
-    const hideLogoutModal = () => {
-        if (logoutModal) logoutModal.style.display = 'none';
-    };
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!notificationBtn.contains(e.target) && !notificationMenu.contains(e.target)) {
+                notificationMenu.classList.remove('show');
+            }
+        });
 
-    // Add event listeners
-    if (logoutBtn) logoutBtn.addEventListener('click', showLogoutModal);
-    if (logoutLink) logoutLink.addEventListener('click', showLogoutModal);
-    if (cancelLogout) cancelLogout.addEventListener('click', hideLogoutModal);
-    
-    if (confirmLogout) {
-        confirmLogout.addEventListener('click', () => {
-            window.location.href = '../logout.php';
+        // Prevent dropdown from closing when clicking inside
+        notificationMenu.addEventListener('click', function(e) {
+            e.stopPropagation();
         });
     }
 
-    // Review modal handlers
-    if (closeModalBtn) {
-        closeModalBtn.addEventListener('click', closeModal);
+    // Mark all as read
+    if (markAllReadBtn) {
+        markAllReadBtn.addEventListener('click', function() {
+            markAllNotificationsAsRead();
+        });
     }
 
-    // Close modals when clicking outside
-    window.addEventListener('click', (event) => {
-        if (logoutModal && event.target === logoutModal) {
-            hideLogoutModal();
+    // Mark individual notification as read
+    if (notificationList) {
+        notificationList.addEventListener('click', function(e) {
+            const notificationItem = e.target.closest('.notification-item');
+            if (notificationItem && notificationItem.classList.contains('unread')) {
+                const notificationId = notificationItem.getAttribute('data-id');
+                markNotificationAsRead(notificationId, notificationItem);
+            }
+        });
+    }
+}
+
+function markNotificationAsRead(notificationId, element) {
+    fetch('advisor_group.php', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'action=mark_notification_read&notification_id=' + notificationId
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            element.classList.remove('unread');
+            updateNotificationBadge();
         }
-        if (reviewModal && event.target === reviewModal) {
-            closeModal();
+    })
+    .catch(error => console.error('Error:', error));
+}
+
+function markAllNotificationsAsRead() {
+    fetch('advisor_group.php', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'action=mark_all_notifications_read'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Remove unread class from all notifications
+            document.querySelectorAll('.notification-item.unread').forEach(item => {
+                item.classList.remove('unread');
+            });
+            updateNotificationBadge();
         }
-    });
+    })
+    .catch(error => console.error('Error:', error));
+}
+
+function updateNotificationBadge() {
+    // Count remaining unread notifications
+    const unreadCount = document.querySelectorAll('.notification-item.unread').length;
+    const badge = document.getElementById('notificationBadge');
+    
+    if (unreadCount > 0) {
+        if (!badge) {
+            const notificationBtn = document.getElementById('notificationBtn');
+            const newBadge = document.createElement('span');
+            newBadge.className = 'notification-badge';
+            newBadge.id = 'notificationBadge';
+            newBadge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+            notificationBtn.appendChild(newBadge);
+        } else {
+            badge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+        }
+    } else if (badge) {
+        badge.remove();
+        
+        // Remove mark all read button if no unread notifications
+        const markAllReadBtn = document.getElementById('markAllRead');
+        if (markAllReadBtn) {
+            markAllReadBtn.remove();
+        }
+    }
 }
 
 function showMessage(text, type = "info") {
@@ -213,17 +310,91 @@ function submitReview() {
 }
 
 // Group management functions
-function reviewChapter(groupId, chapterId) {
-    openReviewModal(groupId, chapterId);
+function reviewChapter(groupId, chapterId, chapterDbId) {
+    currentChapterId = chapterDbId;
+    const modal = document.getElementById('reviewModal');
+    const title = document.getElementById('reviewTitle');
+
+    if (modal && title) {
+        title.textContent = `Review ${groupId} - ${chapterId}`;
+        document.getElementById('chapterId').value = chapterDbId;
+        modal.style.display = 'flex';
+    }
 }
 
 function viewChapterFile(groupId, chapterId) {
     showMessage(`Opening ${chapterId} file for ${groupId}`, "info");
 }
 
-function editFeedback(groupId, chapterId) {
-    showMessage(`Editing feedback for ${groupId}, ${chapterId}`, "info");
+function editFeedback(groupId, chapterId, chapterDbId) {
+    // For now, just open the review modal
+    reviewChapter(groupId, chapterId, chapterDbId);
 }
+
+// Enhanced review functionality
+let currentChapterId = null;
+
+function submitReview() {
+    const form = document.getElementById('reviewForm');
+    const formData = new FormData(form);
+
+    // Add action parameter
+    formData.append('action', 'submit_review');
+
+    const score = document.getElementById('scoreInput').value;
+    const feedback = document.getElementById('feedbackText').value;
+
+    if (!score || score < 0 || score > 100) {
+        showMessage('Please enter a valid score between 0 and 100', 'error');
+        return;
+    }
+
+    if (!feedback.trim()) {
+        showMessage('Please provide feedback', 'error');
+        return;
+    }
+
+    // Submit the review
+    fetch('advisor_group.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showMessage(data.message, 'success');
+            closeModal();
+            // Reload the page to reflect changes
+            setTimeout(() => {
+                location.reload();
+            }, 1500);
+        } else {
+            showMessage(data.message, 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showMessage('Error submitting review', 'error');
+    });
+}
+
+function closeModal() {
+    const modal = document.getElementById('reviewModal');
+    if (modal) {
+        modal.style.display = 'none';
+        // Reset form
+        document.getElementById('reviewForm').reset();
+        currentChapterId = null;
+    }
+}
+
+// Close modal when clicking outside
+window.addEventListener('click', function(event) {
+    const modal = document.getElementById('reviewModal');
+    if (event.target === modal) {
+        closeModal();
+    }
+});
 
 // Responsive sidebar
 window.addEventListener("resize", () => {
@@ -236,7 +407,7 @@ window.addEventListener("resize", () => {
 document.addEventListener('DOMContentLoaded', function() {
     const searchInput = document.querySelector('.search-input');
     const table = document.getElementById('groupsTable');
-    const rows = table.querySelectorAll('tbody tr');
+    const rows = table ? table.querySelectorAll('tbody tr') : [];
     
     // Function to perform search
     function performSearch() {
@@ -260,11 +431,12 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // Event listener for input changes
-    searchInput.addEventListener('input', performSearch);
-    
-    // If there's an initial search term, filter immediately
-    if (searchInput.value) {
-        performSearch();
+    if (searchInput) {
+        searchInput.addEventListener('input', performSearch);
+        
+        // If there's an initial search term, filter immediately
+        if (searchInput.value) {
+            performSearch();
+        }
     }
 });
-

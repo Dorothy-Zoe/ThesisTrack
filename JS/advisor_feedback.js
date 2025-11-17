@@ -124,27 +124,61 @@ function initLogout() {
     });
 }
 
-function editFeedback(groupId, chapterId) {
-    // In a real implementation, this would open an edit interface
-    // For now, we'll simulate it by showing a message and opening the review modal
-    showMessage(`Loading feedback editor for ${groupId} - ${chapterId}...`, "info");
-    
-    // Simulate loading delay
-    setTimeout(() => {
-        // Open the review modal with existing feedback
-        const modal = document.getElementById("reviewModal");
-        const title = document.getElementById("reviewTitle");
-        
-        if (modal && title) {
-            title.textContent = `Edit Feedback for ${groupId.charAt(0).toUpperCase() + groupId.slice(1)} - ${chapterId.charAt(0).toUpperCase() + chapterId.slice(1)}`;
-            modal.style.display = 'flex';
-            
-            // In a real app, you would load the existing feedback here
-            document.getElementById("scoreInput").value = "88"; // Example score
-            document.getElementById("statusSelect").value = "approved";
-            document.getElementById("feedbackText").value = "This is the existing feedback that would be loaded from the database.";
+function editFeedback(commentId) {
+    const btn = document.getElementById('editBtn-' + commentId);
+    const existing = btn ? btn.getAttribute('data-comment') : '';
+
+    // Populate modal
+    const commentInput = document.getElementById('commentId');
+    const feedbackText = document.getElementById('editFeedbackText');
+    if (commentInput) commentInput.value = commentId;
+    if (feedbackText) feedbackText.value = existing || '';
+
+    // Open modal
+    const modal = document.getElementById('editModal');
+    if (modal) {
+        modal.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+}
+
+function submitEdit() {
+    console.log('submitEdit called');
+    const form = document.getElementById('editFeedbackForm');
+    if (!form) { console.error('editFeedbackForm not found'); return; }
+
+    // Prevent multiple simultaneous submissions
+    if (form.dataset.submitting === '1') { console.warn('Already submitting'); return; }
+    form.dataset.submitting = '1';
+
+    const submitBtn = form.querySelector('.btn-primary');
+    if (submitBtn) submitBtn.disabled = true;
+
+    const formData = new FormData(form);
+
+    fetch(form.action, {
+        method: 'POST',
+        body: formData
+    })
+    .then(resp => resp.json())
+    .then(data => {
+        console.log('process_feedback_edit response', data);
+        if (data.success) {
+            showMessage('Feedback updated successfully', 'success');
+            closeModal();
+            setTimeout(() => window.location.reload(), 800);
+        } else {
+            showMessage(data.message || 'Error updating feedback', 'error');
         }
-    }, 800);
+    })
+    .catch(err => {
+        console.error('submitEdit fetch error', err);
+        showMessage('Network error while updating feedback', 'error');
+    })
+    .finally(() => {
+        form.dataset.submitting = '0';
+        if (submitBtn) submitBtn.disabled = false;
+    });
 }
 
 function showMessage(text, type = "info") {
@@ -210,3 +244,209 @@ function submitReview() {
     showMessage("Feedback updated successfully!", "success");
     closeModal();
 }
+
+
+ // Notification functionality
+        function initNotificationSystem() {
+            const notificationBtn = document.getElementById('notificationBtn');
+            const notificationMenu = document.getElementById('notificationMenu');
+            const markAllReadBtn = document.getElementById('markAllRead');
+            const notificationList = document.getElementById('notificationList');
+            
+            if (notificationBtn && notificationMenu) {
+                // Toggle notification dropdown
+                notificationBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleNotificationMenu();
+                });
+                
+                // Mark all as read
+                if (markAllReadBtn) {
+                    markAllReadBtn.addEventListener('click', markAllAsRead);
+                }
+                
+                // Close notification menu when clicking outside
+                document.addEventListener('click', (e) => {
+                    if (!e.target.closest('.notification-dropdown')) {
+                        closeNotificationMenu();
+                    }
+                });
+                
+                // Handle notification item clicks
+                if (notificationList) {
+                    notificationList.addEventListener('click', (e) => {
+                        const notificationItem = e.target.closest('.notification-item');
+                        if (notificationItem && notificationItem.classList.contains('unread')) {
+                            const notificationId = notificationItem.dataset.id;
+                            markAsRead(notificationId);
+                        }
+                    });
+                }
+            }
+        }
+
+        function toggleNotificationMenu() {
+            const menu = document.getElementById('notificationMenu');
+            if (menu) {
+                const isVisible = menu.style.display === 'block';
+                menu.style.display = isVisible ? 'none' : 'block';
+                
+                if (!isVisible) {
+                    // Refresh notifications when opening
+                    refreshNotifications();
+                }
+            }
+        }
+
+        function closeNotificationMenu() {
+            const menu = document.getElementById('notificationMenu');
+            if (menu) {
+                menu.style.display = 'none';
+            }
+        }
+
+        function markAsRead(notificationId) {
+            const formData = new FormData();
+            formData.append('notification_action', 'mark_as_read');
+            formData.append('notification_id', notificationId);
+
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update UI
+                    const notificationItem = document.querySelector(`.notification-item[data-id="${notificationId}"]`);
+                    if (notificationItem) {
+                        notificationItem.classList.remove('unread');
+                    }
+                    updateNotificationBadge();
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+        function markAllAsRead() {
+            const formData = new FormData();
+            formData.append('notification_action', 'mark_all_read');
+
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update UI
+                    document.querySelectorAll('.notification-item.unread').forEach(item => {
+                        item.classList.remove('unread');
+                    });
+                    updateNotificationBadge();
+                    
+                    // Hide mark all read button
+                    const markAllReadBtn = document.getElementById('markAllRead');
+                    if (markAllReadBtn) {
+                        markAllReadBtn.style.display = 'none';
+                    }
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+        function updateNotificationBadge() {
+            const badge = document.getElementById('notificationBadge');
+            const unreadCount = document.querySelectorAll('.notification-item.unread').length;
+            
+            if (badge) {
+                if (unreadCount > 0) {
+                    badge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+                    // badge.style.display = 'inline-block';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+        }
+
+        function refreshNotifications() {
+            const formData = new FormData();
+            formData.append('notification_action', 'get_notifications');
+
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateNotificationList(data.notifications);
+                    updateNotificationBadge();
+                }
+            })
+            .catch(error => console.error('Error refreshing notifications:', error));
+        }
+
+        function updateNotificationList(notifications) {
+            const notificationList = document.getElementById('notificationList');
+            if (!notificationList) return;
+            
+            if (notifications.length === 0) {
+                notificationList.innerHTML = `
+                    <div class="no-notifications">
+                        <i class="fas fa-bell-slash"></i>
+                        <p>No notifications</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            notificationList.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_read ? '' : 'unread'}" 
+                     data-id="${notification.id}">
+                    <span class="notification-type type-${notification.type || 'info'}">
+                        ${(notification.type || 'info').charAt(0).toUpperCase() + (notification.type || 'info').slice(1)}
+                    </span>
+                    <div class="notification-title">
+                        ${escapeHtml(notification.title)}
+                    </div>
+                    <div class="notification-message">
+                        ${escapeHtml(notification.message)}
+                    </div>
+                    <div class="notification-time">
+                        ${formatTime(notification.created_at)}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function formatTime(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diffMs = now - date;
+            const diffMins = Math.floor(diffMs / 60000);
+            const diffHours = Math.floor(diffMs / 3600000);
+            const diffDays = Math.floor(diffMs / 86400000);
+            
+            if (diffMins < 1) return 'Just now';
+            if (diffMins < 60) return `${diffMins}m ago`;
+            if (diffHours < 24) return `${diffHours}h ago`;
+            if (diffDays < 7) return `${diffDays}d ago`;
+            
+            return date.toLocaleDateString();
+        }
+
+        function escapeHtml(unsafe) {
+            if (!unsafe) return '';
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        // Initialize notification system when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            initNotificationSystem();
+        });

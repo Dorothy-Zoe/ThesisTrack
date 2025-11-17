@@ -1,13 +1,7 @@
 <?php
-session_start();
-require_once '../db/db.php';
-
-// Check authentication
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'student') {
-    header('Content-Type: application/json');
-    echo json_encode(['success' => false, 'message' => 'Unauthorized']);
-    exit();
-}
+require_once __DIR__ . '/../auth.php';
+requireRole(['student']);
+require_once __DIR__ . '/../db/db.php';
 
 $student_id = $_SESSION['user_id'];
 

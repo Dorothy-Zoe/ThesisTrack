@@ -1,16 +1,306 @@
 <?php
-session_start();
-require_once '../db/db.php';
-
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'advisor') {
-    header('Location: advisor_login.php');
-    exit();
-}
+require_once __DIR__ . '/../auth.php';
+requireRole(['advisor']);
+require_once __DIR__ . '/../db/db.php';
+// Add PHPMailer requirement
+require_once __DIR__ . '/../vendor/autoload.php'; // Adjust path as needed
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
 
 $advisor_id = $_SESSION['user_id'];
 $advisor_name = $_SESSION['name'] ?? 'Advisor';
 
 $profile_picture = '../images/default-user.png'; // Default image
+
+// Function to send email using PHPMailer
+function sendStudentCredentials($email, $firstName, $lastName, $studentId, $tempPassword, $section) {
+    global $pdo, $advisor_id, $advisor_name;
+    
+    $mail = new PHPMailer(true);
+    
+    try {
+        // Server settings
+        $mail->isSMTP();
+        $mail->Host = 'smtp.gmail.com';
+        $mail->SMTPAuth = true;
+        $mail->Username = 'klarerivera25@gmail.com'; // Your Gmail address
+        $mail->Password = 'bztg uiur xzho wslv'; // Your Gmail app password
+        $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        $mail->Port = 587;
+        
+        // Recipients
+        $mail->setFrom('klarerivera25@gmail.com', 'ThesisTrack System');
+        $mail->addAddress($email, $firstName . ' ' . $lastName);
+        
+        // Content
+        $mail->isHTML(true);
+        $mail->Subject = 'Your ThesisTrack Student Account Credentials';
+        
+        $mail->Body = "
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                    .header { background-color: #4a86e8; color: white; padding: 15px; text-align: center; border-radius: 5px 5px 0 0; }
+                    .content { background-color: #f9f9f9; padding: 20px; border-radius: 0 0 5px 5px; }
+                    .credentials { background-color: #fff; padding: 15px; border: 1px solid #ddd; border-radius: 5px; margin: 15px 0; }
+                    .footer { margin-top: 20px; font-size: 12px; color: #777; text-align: center; }
+                    .important { color: #e74c3c; font-weight: bold; }
+                </style>
+            </head>
+            <body>
+                <div class='container'>
+                    <div class='header'>
+                        <h2>ThesisTrack Student Account</h2>
+                    </div>
+                    <div class='content'>
+                        <p>Dear $firstName $lastName,</p>
+                        <p>Your student account has been successfully created in the ThesisTrack system.</p>
+                        
+                        <div class='credentials'>
+                            <h3>Your Login Credentials:</h3>
+                            <p><strong>Email:</strong> $email</p>
+                            <p><strong>Student ID:</strong> $studentId</p>
+                            <p><strong>Section:</strong> $section</p>
+                            <p><strong>Temporary Password:</strong> $tempPassword</p>
+                        </div>
+                        
+                        <p class='important'>Important: You will be required to change your password upon first login for security purposes.</p>
+                        
+                        <p>You can access the system at: <a href='http://tcu-thesistrack.com/login.php'>http://tcu-thesistrack.com/login.php</a></p>
+                        
+                        <p>If you have any questions, please contact your advisor or the system administrator or the research coordinator</p>
+                    </div>
+                    <div class='footer'>
+                        <p>This is an automated message. Please do not reply to this email.</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+        ";
+        
+        // Alternative plain text version for non-HTML mail clients
+        $mail->AltBody = "
+            ThesisTrack Student Account
+            
+            Dear $firstName $lastName,
+            
+            Your student account has been successfully created in the ThesisTrack system.
+            
+            Your Login Credentials:
+            Email: $email
+            Student ID: $studentId
+            Section: $section
+            Temporary Password: $tempPassword
+            
+            Important: You will be required to change your password upon first login for security purposes.
+            
+            You can access the system at: http://tcu-thesistrack.com/login.php
+            
+            If you have any questions, please contact your advisor or the system administrator or the research coordinator
+            
+            This is an automated message. Please do not reply to this email.
+        ";
+        
+        $mail->send();
+        
+        // Now notify the coordinator about the new student
+        notifyCoordinator($firstName, $lastName, $studentId, $email, $advisor_name, $section);
+        
+        return true;
+    } catch (Exception $e) {
+        error_log("Email sending failed: " . $mail->ErrorInfo);
+        return false;
+    }
+}
+
+// New function to notify coordinator
+function notifyCoordinator($firstName, $lastName, $studentId, $email, $advisorName, $section) {
+    global $pdo;
+    
+    try {
+        // Get all coordinators
+        $stmt = $pdo->prepare("SELECT id, email, first_name, last_name FROM coordinators WHERE status = 'active'");
+        $stmt->execute();
+        $coordinators = $stmt->fetchAll();
+        
+        foreach ($coordinators as $coordinator) {
+            // Add notification to database
+            $notification_stmt = $pdo->prepare("
+                INSERT INTO notifications 
+                (user_id, user_type, title, message, type, is_read, created_at)
+                VALUES (?, 'coordinator', ?, ?, 'info', 0, NOW())
+            ");
+            
+            $title = "New Student Account Created";
+            $message = "Student $firstName $lastName (ID: $studentId, Section: $section) has been added by advisor $advisorName.";
+            
+            $notification_stmt->execute([
+                $coordinator['id'],
+                $title,
+                $message
+            ]);
+            
+            // Send email notification to coordinator
+            sendCoordinatorNotification($coordinator['email'], $coordinator['first_name'], $firstName, $lastName, $studentId, $email, $advisorName, $section);
+        }
+        
+        return true;
+    } catch (PDOException $e) {
+        error_log("Coordinator notification error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Function to send email notification to coordinator
+function sendCoordinatorNotification($coordinatorEmail, $coordinatorName, $studentFirstName, $studentLastName, $studentId, $studentEmail, $advisorName, $section) {
+    $mail = new PHPMailer(true);
+    
+    try {
+        // Server settings
+        $mail->isSMTP();
+        $mail->Host = 'smtp.gmail.com';
+        $mail->SMTPAuth = true;
+        $mail->Username = 'klarerivera25@gmail.com';
+        $mail->Password = 'bztg uiur xzho wslv';
+        $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        $mail->Port = 587;
+        
+        // Recipients
+        $mail->setFrom('klarerivera25@gmail.com', 'ThesisTrack System');
+        $mail->addAddress($coordinatorEmail, $coordinatorName);
+        
+        // Content
+        $mail->isHTML(true);
+        $mail->Subject = 'New Student Registration - ThesisTrack System';
+        
+        $mail->Body = "
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                    .header { background-color: #4a86e8; color: white; padding: 15px; text-align: center; border-radius: 5px 5px 0 0; }
+                    .content { background-color: #f9f9f9; padding: 20px; border-radius: 0 0 5px 5px; }
+                    .student-info { background-color: #fff; padding: 15px; border: 1px solid #ddd; border-radius: 5px; margin: 15px 0; }
+                    .footer { margin-top: 20px; font-size: 12px; color: #777; text-align: center; }
+                </style>
+            </head>
+            <body>
+                <div class='container'>
+                    <div class='header'>
+                        <h2>New Student Registration</h2>
+                    </div>
+                    <div class='content'>
+                        <p>Dear $coordinatorName,</p>
+                        <p>A new student has been registered in the ThesisTrack system.</p>
+                        
+                        <div class='student-info'>
+                            <h3>Student Details:</h3>
+                            <p><strong>Name:</strong> $studentFirstName $studentLastName</p>
+                            <p><strong>Student ID:</strong> $studentId</p>
+                            <p><strong>Section:</strong> $section</p>
+                            <p><strong>Email:</strong> $studentEmail</p>
+                            <p><strong>Added by Advisor:</strong> $advisorName</p>
+                            <p><strong>Registration Date:</strong> " . date('F j, Y g:i A') . "</p>
+                        </div>
+                        
+                        <p>You can access the system at: <a href='http://tcu-thesistrack.com/coordinator_dashboard.php'</a></p>
+                        
+                       
+                    </div>
+                    <div class='footer'>
+                        <p>This is an automated notification from ThesisTrack System.</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+        ";
+        
+        // Alternative plain text version
+        $mail->AltBody = "
+            New Student Registration - ThesisTrack System
+            
+            Dear $coordinatorName,
+            
+            A new student has been registered in the ThesisTrack system.
+            
+            Student Details:
+            Name: $studentFirstName $studentLastName
+            Student ID: $studentId
+            Section: $section
+            Email: $studentEmail
+            Added by Advisor: $advisorName
+            Registration Date: " . date('F j, Y g:i A') . "
+            
+            You can view all students in the system.
+            
+            This is an automated notification from ThesisTrack System.
+        ";
+        
+        $mail->send();
+        return true;
+    } catch (Exception $e) {
+        error_log("Coordinator email notification failed: " . $mail->ErrorInfo);
+        return false;
+    }
+}
+
+// Handle notification actions (mark as read, mark all read)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['notification_action'])) {
+    header('Content-Type: application/json');
+    
+    try {
+        $action = $_POST['notification_action'];
+        
+        if ($action === 'mark_as_read' && isset($_POST['notification_id'])) {
+            $notification_id = (int)$_POST['notification_id'];
+            
+            $stmt = $pdo->prepare("
+                UPDATE notifications 
+                SET is_read = 1 
+                WHERE id = ? AND user_id = ? AND user_type = 'advisor'
+            ");
+            $stmt->execute([$notification_id, $advisor_id]);
+            
+            echo json_encode(['success' => true]);
+            
+        } elseif ($action === 'mark_all_read') {
+            $stmt = $pdo->prepare("
+                UPDATE notifications 
+                SET is_read = 1 
+                WHERE user_id = ? AND user_type = 'advisor' AND is_read = 0
+            ");
+            $stmt->execute([$advisor_id]);
+            
+            echo json_encode(['success' => true]);
+            
+        } elseif ($action === 'get_notifications') {
+            $stmt = $pdo->prepare("
+                SELECT * FROM notifications 
+                WHERE user_id = ? AND user_type = 'advisor' 
+                ORDER BY created_at DESC 
+                LIMIT 10
+            ");
+            $stmt->execute([$advisor_id]);
+            $notifications = $stmt->fetchAll();
+            
+            echo json_encode([
+                'success' => true,
+                'notifications' => $notifications
+            ]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Invalid action']);
+        }
+    } catch (PDOException $e) {
+        error_log("Notifications error: " . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'Database error']);
+    }
+    exit();
+}
 
 try {
     // Get advisor details including profile picture
@@ -32,12 +322,36 @@ try {
         }
     }
 
-
 } catch (PDOException $e) {
     // Log the error and use default values
     error_log("Database error fetching advisor details: " . $e->getMessage());
     $user_name = 'Advisor';
     $profile_picture = '../images/default-user.png';
+}
+
+// Fetch unread notifications count and recent notifications
+try {
+    $notification_stmt = $pdo->prepare("
+        SELECT * FROM notifications 
+        WHERE user_id = ? AND user_type = 'advisor' 
+        ORDER BY created_at DESC 
+        LIMIT 10
+    ");
+    $notification_stmt->execute([$advisor_id]);
+    $notifications = $notification_stmt->fetchAll();
+    
+    // Count unread notifications
+    $unread_count_stmt = $pdo->prepare("
+        SELECT COUNT(*) as count FROM notifications 
+        WHERE user_id = ? AND user_type = 'advisor' AND is_read = 0
+    ");
+    $unread_count_stmt->execute([$advisor_id]);
+    $unread_notifications_count = $unread_count_stmt->fetch()['count'];
+    
+} catch (PDOException $e) {
+    $notifications = [];
+    $unread_notifications_count = 0;
+    error_log("Error fetching notifications: " . $e->getMessage());
 }
 
 // Get advisor's section and course
@@ -56,6 +370,265 @@ try {
     $advisor_section = null;
     $advisor_course = null;
     $available_sections = [];
+}
+
+// ================== CSV IMPORT/EXPORT FUNCTIONALITY ================== //
+
+// Handle CSV export (template or data)
+if (isset($_GET['action']) && $_GET['action'] === 'export_csv') {
+    $type = $_GET['type'] ?? 'template';
+    
+    if ($type === 'template') {
+        // Generate CSV template for import
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=student_import_template.csv');
+        
+        $output = fopen('php://output', 'w');
+        
+        // Get available sections from the advisor's profile, not from existing students
+        $available_sections_for_template = [];
+        
+        if (!empty($advisor_section)) {
+            $available_sections_for_template = array_map('trim', explode(',', $advisor_section));
+        }
+        
+        // Add comment row with available sections
+        if (!empty($available_sections_for_template)) {
+            fputcsv($output, ['# Available sections: ' . implode(', ', $available_sections_for_template)]);
+            fputcsv($output, ['# IMPORTANT: Section must be one of the values above']);
+        } else {
+            fputcsv($output, ['# No sections available. Please contact administrator.']);
+        }
+        
+        // Add empty row for separation
+        fputcsv($output, []);
+        
+        // Add headers
+        fputcsv($output, ['first_name', 'last_name', 'middle_name', 'email', 'section']);
+        fclose($output);
+        exit();
+        
+    } elseif ($type === 'data') {
+        // Export current student data
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=student_data_export.csv');
+        
+        $output = fopen('php://output', 'w');
+        fputcsv($output, ['student_id', 'first_name', 'last_name', 'middle_name', 'email', 'section', 'status', 'group_assignment']);
+        
+        try {
+            $stmt = $pdo->prepare("
+                SELECT s.student_id, s.first_name, s.last_name, s.middle_name, s.email, s.section, s.status,
+                       GROUP_CONCAT(g.title SEPARATOR ', ') as group_title
+                FROM students s
+                LEFT JOIN group_members gm ON s.id = gm.student_id
+                LEFT JOIN groups g ON gm.group_id = g.id
+                WHERE s.advisor_id = ?
+                GROUP BY s.id
+                ORDER BY s.last_name, s.first_name
+            ");
+            $stmt->execute([$advisor_id]);
+            
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                fputcsv($output, [
+                    $row['student_id'],
+                    $row['first_name'],
+                    $row['last_name'],
+                    $row['middle_name'] ?? '',
+                    $row['email'],
+                    $row['section'],
+                    $row['status'],
+                    $row['group_title'] ?? 'Not Assigned'
+                ]);
+            }
+        } catch (PDOException $e) {
+            // Log error but continue with empty export
+            error_log("Export error: " . $e->getMessage());
+        }
+        
+        fclose($output);
+        exit();
+    }
+}
+
+// Handle CSV import
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'import_csv') {
+    header('Content-Type: application/json');
+    
+    // Check if advisor has required assignments
+    if (empty($advisor_section) || empty($advisor_course)) {
+        echo json_encode(['success' => false, 'message' => 'You must be assigned to a section and course.']);
+        exit();
+    }
+    
+    // Check if file was uploaded successfully
+    if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['success' => false, 'message' => 'Please select a valid CSV file.']);
+        exit();
+    }
+    
+    // Get available sections for validation - use advisor's assigned sections
+    try {
+        $available_sections = [];
+        if (!empty($advisor_section)) {
+            $available_sections = array_map('trim', explode(',', $advisor_section));
+        }
+    } catch (PDOException $e) {
+        echo json_encode(['success' => false, 'message' => 'Error fetching available sections.']);
+        exit();
+    }
+    
+    $file = $_FILES['csv_file']['tmp_name'];
+    
+    // Check if file is readable
+    if (!is_readable($file)) {
+        echo json_encode(['success' => false, 'message' => 'Cannot read the uploaded file.']);
+        exit();
+    }
+    
+    $handle = fopen($file, 'r');
+    
+    if (!$handle) {
+        echo json_encode(['success' => false, 'message' => 'Failed to open the uploaded file.']);
+        exit();
+    }
+    
+    // Skip possible comment rows and get to actual headers
+    $header = [];
+    while (($row = fgetcsv($handle)) !== FALSE) {
+        if (empty($row[0]) || strpos($row[0], '#') === 0) {
+            continue; // Skip comment rows and empty rows
+        }
+        $header = $row;
+        break;
+    }
+    
+    // Validate header structure
+    $expected_headers = ['first_name', 'last_name', 'middle_name', 'email', 'section'];
+    if (count($header) < 5 || $header !== $expected_headers) {
+        fclose($handle);
+        echo json_encode(['success' => false, 'message' => 'Invalid CSV format. Expected headers: first_name, last_name, middle_name, email, section']);
+        exit();
+    }
+    
+    $imported = 0;
+    $errors = [];
+    $line = 1; // Start counting from header row
+    
+    while (($data = fgetcsv($handle)) !== FALSE) {
+        $line++;
+        
+        // Skip empty rows
+        if (empty(array_filter($data))) {
+            continue;
+        }
+        
+        // Skip comment rows
+        if (!empty($data[0]) && strpos($data[0], '#') === 0) {
+            continue;
+        }
+        
+        // Validate required number of columns
+        if (count($data) < 5) {
+            $errors[] = "Line $line: Insufficient data columns (need: first_name, last_name, middle_name, email, section)";
+            continue;
+        }
+        
+        $first_name = sanitize(trim($data[0]));
+        $last_name = sanitize(trim($data[1]));
+        $middle_name = sanitize(trim($data[2] ?? ''));
+        $email = sanitize(trim($data[3]));
+        $section = sanitize(trim($data[4]));
+        
+        // Validate required fields
+        if (empty($first_name) || empty($last_name) || empty($email) || empty($section)) {
+            $errors[] = "Line $line: Missing required fields (first name, last name, email, or section)";
+            continue;
+        }
+        
+        // Validate email format
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $errors[] = "Line $line: Invalid email format '$email'";
+            continue;
+        }
+        
+        // Validate section is in available sections
+        if (!in_array($section, $available_sections)) {
+            $errors[] = "Line $line: Invalid section '$section'. Must be one of: " . implode(', ', $available_sections);
+            continue;
+        }
+        
+        try {
+            // Check if student already exists by email
+            $check_stmt = $pdo->prepare("SELECT id FROM students WHERE email = ?");
+            $check_stmt->execute([$email]);
+            
+            if ($check_stmt->fetch()) {
+                $errors[] = "Line $line: Student with email '$email' already exists";
+                continue;
+            }
+            
+            // Generate student ID
+            $year = date('Y');
+            $count_stmt = $pdo->prepare("SELECT COUNT(*) as count FROM students WHERE course = ? AND YEAR(created_at) = ?");
+            $count_stmt->execute([$advisor_course, $year]);
+            $count = $count_stmt->fetch()['count'];
+            $student_id = $year . '-' . $advisor_course . '-' . str_pad($count + 1, 4, '0', STR_PAD_LEFT);
+            
+            // Fixed default password - Generate "student" + random number
+            $tempPassword = 'student' . rand(1000, 9999);
+            $hashed_password = password_hash($tempPassword, PASSWORD_DEFAULT);
+            
+            // Insert student
+            $insert_stmt = $pdo->prepare("
+                INSERT INTO students 
+                (first_name, middle_name, last_name, email, password, student_id, year_level, section, course, status, profile_picture, advisor_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 3, ?, ?, 'active', '', ?, NOW())
+            ");
+            
+            $insert_stmt->execute([
+                $first_name, $middle_name, $last_name, $email, $hashed_password,
+                $student_id, $section, $advisor_course, $advisor_id
+            ]);
+            
+            // Get the inserted student ID
+            $student_id_db = $pdo->lastInsertId();
+            
+            // Send email with credentials
+            $emailSent = sendStudentCredentials($email, $first_name, $last_name, $student_id, $tempPassword, $section);
+            
+            $imported++;
+            
+        } catch (PDOException $e) {
+            $errors[] = "Line $line: Database error - " . $e->getMessage();
+            error_log("Import error on line $line: " . $e->getMessage());
+        }
+    }
+    
+    fclose($handle);
+    
+    // Prepare response
+    $response = [
+        'success' => $imported > 0,
+        'imported' => $imported,
+        'total_errors' => count($errors),
+        'errors' => $errors
+    ];
+    
+    if ($imported > 0) {
+        $response['message'] = "Successfully imported $imported students. Students account credentials successfully sent.";
+        if (!empty($errors)) {
+            $response['message'] .= " " . count($errors) . " errors occurred during import.";
+        }
+    } else {
+        $response['message'] = 'No students were imported.';
+        if (!empty($errors)) {
+            $response['message'] .= " " . count($errors) . " errors occurred.";
+        }
+    }
+    
+    echo json_encode($response);
+    exit();
 }
 
 // ================== version 7 update here  ================== //
@@ -99,36 +672,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $first_name = sanitize($_POST['first_name']);
             $middle_name = sanitize($_POST['middle_name'] ?? '');
             $last_name = sanitize($_POST['last_name']);
+            $email = sanitize($_POST['email'] ?? '');
             $section = sanitize($_POST['section'] ?? '');
 
-            if (empty($first_name) || empty($last_name) || empty($section)) {
-                echo json_encode(['success' => false, 'message' => 'First name, last name, and section are required.']);
+            if (empty($first_name) || empty($last_name) || empty($email) || empty($section)) {
+                echo json_encode(['success' => false, 'message' => 'First name, last name, email, and section are required.']);
+                exit();
+            }
+            
+            // Validate email format
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                echo json_encode(['success' => false, 'message' => 'Invalid email format.']);
                 exit();
             }
 
             try {
+                // Check if email already exists
+                $stmt = $pdo->prepare("SELECT id FROM students WHERE email = ?");
+                $stmt->execute([$email]);
+                if ($stmt->fetch()) {
+                    echo json_encode(['success' => false, 'message' => 'Email already exists.']);
+                    exit();
+                }
+                
                 $year = date('Y');
                 $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM students WHERE course = ?");
                 $stmt->execute([$advisor_course]);
                 $count = $stmt->fetch()['count'];
                 $student_id = $year . '-' . $advisor_course . '-' . str_pad($count + 1, 4, '0', STR_PAD_LEFT);
 
-                $email_name = strtolower(str_replace(' ', '.', $first_name . '.' . $last_name));
-                $email = $email_name . '@student.cict.edu';
-
-                $stmt = $pdo->prepare("SELECT id FROM students WHERE email = ?");
-                $stmt->execute([$email]);
-                if ($stmt->fetch()) {
-                    $counter = 1;
-                    do {
-                        $email = $email_name . $counter . '@student.cict.edu';
-                        $stmt->execute([$email]);
-                        $counter++;
-                    } while ($stmt->fetch());
-                }
-
-                $temp_password = 'student' . rand(1000, 9999);
-                $hashed_password = password_hash($temp_password, PASSWORD_DEFAULT);
+                // Fixed default password - Generate "student" + random number
+                $tempPassword = 'student' . rand(1000, 9999);
+                $hashed_password = password_hash($tempPassword, PASSWORD_DEFAULT);
 
                 $stmt = $pdo->prepare("
                     INSERT INTO students 
@@ -140,15 +715,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $student_id, $section, $advisor_course, $advisor_id
                 ]);
 
+                // Send email with credentials
+                $emailSent = sendStudentCredentials($email, $first_name, $last_name, $student_id, $tempPassword, $section);
+                
+                $emailMessage = $emailSent 
+                    ? " Email with credentials has been sent to the student." 
+                    : " Note: Failed to send email with credentials.";
+
                 echo json_encode([
                     'success' => true,
-                    'message' => 'Student added successfully!',
+                    'message' => 'Student added successfully!' . $emailMessage . ' Coordinator has been notified.',
                     'student_data' => [
                         'name' => $first_name . ' ' . $middle_name . ' ' . $last_name,
                         'email' => $email,
                         'student_id' => $student_id,
-                        'temp_password' => $temp_password
-                    ]
+                        'section' => $section,
+                        'temp_password' => $tempPassword
+                    ],
+                    'email_sent' => $emailSent
                 ]);
             } catch (PDOException $e) {
                 echo json_encode(['success' => false, 'message' => 'Failed to add student.']);
@@ -160,20 +744,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $first_name = sanitize($_POST['first_name']);
             $middle_name = sanitize($_POST['middle_name'] ?? '');
             $last_name = sanitize($_POST['last_name']);
+            $email = sanitize($_POST['email'] ?? '');
             $section = sanitize($_POST['section'] ?? '');
 
-            if (empty($first_name) || empty($last_name) || empty($section)) {
-                echo json_encode(['success' => false, 'message' => 'First name, last name, and section are required.']);
+            if (empty($first_name) || empty($last_name) || empty($email) || empty($section)) {
+                echo json_encode(['success' => false, 'message' => 'First name, last name, email, and section are required.']);
+                exit();
+            }
+            
+            // Validate email format
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                echo json_encode(['success' => false, 'message' => 'Invalid email format.']);
                 exit();
             }
 
             try {
+                // Check if email already exists for another student
+                $stmt = $pdo->prepare("SELECT id FROM students WHERE email = ? AND id != ?");
+                $stmt->execute([$email, $student_id]);
+                if ($stmt->fetch()) {
+                    echo json_encode(['success' => false, 'message' => 'Email already exists for another student.']);
+                    exit();
+                }
+
                 $stmt = $pdo->prepare("
                     UPDATE students 
-                    SET first_name = ?, middle_name = ?, last_name = ?, section = ?
+                    SET first_name = ?, middle_name = ?, last_name = ?, email = ?, section = ?
                     WHERE id = ? AND advisor_id = ?
                 ");
-                $stmt->execute([$first_name, $middle_name, $last_name, $section, $student_id, $advisor_id]);
+                $stmt->execute([$first_name, $middle_name, $last_name, $email, $section, $student_id, $advisor_id]);
 
                 if ($stmt->rowCount() > 0) {
                     echo json_encode(['success' => true, 'message' => 'Student updated successfully!']);
@@ -257,10 +856,7 @@ try {
     $paginated_students = [];
     error_log("Database error: " . $e->getMessage());
 }
-
 ?>
-
-
 
 <!DOCTYPE html>
 <html lang="en">
@@ -269,8 +865,10 @@ try {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="../images/book-icon.ico">
     <link rel="stylesheet" href="../CSS/advisor_student-management.css">
+    <link rel="stylesheet" href="../CSS/session_timeout.css">
     <script src="https://kit.fontawesome.com/4ef2a0fa98.js" crossorigin="anonymous"></script>
     <title>ThesisTrack</title>
+    
 </head>
 <body>
     <div class="app-container">
@@ -300,7 +898,7 @@ try {
                     <i class="fas fa-users-rectangle"></i> Groups Management
                 </a>
                 <a href="advisor_reviews.php" class="nav-item" data-tab="reviews">
-                    <i class="fas fa-tasks"></i> Pending Reviews
+                    <i class="fas fa-tasks"></i> Feedback Management
                 </a>
                 <a href="advisor_feedback.php" class="nav-item" data-tab="feedback">
                     <i class="fas fa-comments"></i> Feedback History
@@ -309,17 +907,33 @@ try {
                     <i class="fas fa-sign-out-alt"></i> Logout
                 </a>
 
-                 <!-- Logout Confirmation Modal for SIDEBAR -->
-                <div id="logoutModal" class="logout-modal" style="display:none;">
-                    <div class="logout-modal-content">
-                        <h3>Confirm Logout</h3>
-                        <p>Are you sure you want to logout?</p>
-                        <div class="modal-buttons">
-                            <button id="confirmLogout" class="btn btn-danger">Yes, Logout</button>
-                            <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
+            <!-- Enhanced logout confirmation modal -->
+                    <div id="logoutModal" class="modal">
+                        <div class="modal-content modal-centered">
+                            <div class="modal-header">
+                                <h3 class="modal-title">Confirm Logout</h3>
+                                <button class="close-modal" onclick="closeLogoutModal()">&times;</button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="logout-confirmation">
+                                    <div class="logout-icon">
+                                        <i class="fas fa-sign-out-alt"></i>
+                                    </div>
+                                    <p>Are you sure you want to logout from ThesisTrack?</p>
+                                    <p class="logout-note">You will need to login again to access your dashboard.</p>
+                                </div>
+                            </div>
+                            <div class="modal-actions">
+                                <button class="btn-modal btn-cancel" id="cancelLogout" onclick="closeLogoutModal()">
+                                    <i class="fas fa-times"></i> Cancel
+                                </button>
+                                <button class="btn-modal btn-danger" id="confirmLogout" onclick="confirmLogout()">
+                                    <i class="fas fa-sign-out-alt"></i> Yes, Logout
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
+
             </nav>
 
         </aside>
@@ -331,34 +945,73 @@ try {
             <!-- Header -->
             <header class="blank-header">
               <div class="topbar-left"></div>
-                <div class="topbar-right">
-                        <button class="topbar-icon" title="Notifications">
-                            <i class="fas fa-bell"></i>
-                        </button>
-                            <div class="user-info dropdown">
-                                 <img src="<?php echo htmlspecialchars($profile_picture); ?>" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0" />
-                                <div class="dropdown-menu" id="userDropdown">
-                                    <a href="#" class="dropdown-item">
-                                        <i class="fas fa-cog"></i> Settings
-                                    </a>
-                                    <a href="#" id="headerLogoutLink" class="dropdown-item">
-                                        <i class="fas fa-sign-out-alt"></i> Logout
-                                    </a>
-                                </div>
-                            </div>
 
-                            <!-- Logout Confirmation Modal for HEADER -->
-                            <div id="logoutModal" class="modal" style="display:none;">
-                                <div class="modal-content logout-modal-content">
-                                    <h3>Confirm Logout</h3>
-                                    <p>Are you sure you want to logout?</p>
-                                    <div class="modal-buttons">
-                                        <button id="confirmLogout" class="btn btn-danger">Yes, Logout</button>
-                                        <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
-                                    </div>
-                                </div>
+                <div class="topbar-right">
+                    <!-- Notification Dropdown -->
+                    <div class="notification-dropdown">
+                        <button class="topbar-icon" title="Notifications" id="notificationBtn">
+                            <i class="fas fa-bell"></i>
+                            <?php if ($unread_notifications_count > 0): ?>
+                                <span class="notification-badge" id="notificationBadge">
+                                    <?php echo $unread_notifications_count > 9 ? '9+' : $unread_notifications_count; ?>
+                                </span>
+                            <?php endif; ?>
+                        </button>
+                        <div class="notification-menu" id="notificationMenu">
+                            <div class="notification-header">
+                                <h4>Notifications</h4>
+                                <?php if ($unread_notifications_count > 0): ?>
+                                    <button class="mark-all-read" id="markAllRead">Mark all as read</button>
+                                <?php endif; ?>
                             </div>
+                            <div class="notification-list" id="notificationList">
+                                <?php if (!empty($notifications)): ?>
+                                    <?php foreach ($notifications as $notification): ?>
+                                        <div class="notification-item <?php echo $notification['is_read'] ? '' : 'unread'; ?>" 
+                                             data-id="<?php echo $notification['id']; ?>">
+                                            <span class="notification-type type-<?php echo $notification['type'] ?? 'info'; ?>">
+                                                <?php echo ucfirst($notification['type'] ?? 'info'); ?>
+                                            </span>
+                                            <div class="notification-title">
+                                                <?php echo htmlspecialchars($notification['title']); ?>
+                                            </div>
+                                            <div class="notification-message">
+                                                <?php echo htmlspecialchars($notification['message']); ?>
+                                            </div>
+                                            <div class="notification-time">
+                                                <?php echo date('M d, Y g:i A', strtotime($notification['created_at'])); ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="no-notifications">
+                                        <i class="fas fa-bell-slash"></i>
+                                        <p>No notifications</p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            <a href="#" class="view-all-notifications">
+                                View All Notifications
+                            </a>
+                        </div>
                     </div>
+                    <div class="user-info dropdown">
+                        <img src="<?php echo htmlspecialchars($profile_picture); ?>" 
+                            alt="User Avatar" 
+                            class="user-avatar" 
+                            id="userAvatar" 
+                            tabindex="0" />
+                        <div class="dropdown-menu" id="userDropdown">
+                            <a href="advisor_settings.php" class="dropdown-item">
+                                <i class="fas fa-cog"></i> Settings
+                            </a>
+                            <a href="#" class="dropdown-item" id="headerLogoutLink">
+                                <i class="fas fa-sign-out-alt"></i> Logout
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
             </header>
         <!-- End Header -->
             <!-- Main Content -->
@@ -384,9 +1037,21 @@ try {
                         </div>
                     <?php else: ?>
                         <div class="action-section">
-                            <button class="btn-primary" onclick="addNewStudent()" <?php echo !$advisor_section ? 'disabled' : ''; ?>>
-                                <i class="fas fa-plus"></i> Add New Student
-                            </button>
+                           
+                            
+                            <!-- CSV Import/Export Buttons -->
+                            <div class="csv-buttons">
+                                <button class="btn-secondary" onclick="exportCSV('template')">
+                                    <i class="fas fa-download"></i> Download Template
+                                </button>
+                                <button class="btn-secondary" onclick="showImportModal()">
+                                    <i class="fas fa-upload"></i> Import CSV
+                                </button>
+                                <button class="btn-secondary" onclick="exportCSV('data')">
+                                    <i class="fas fa-file-export"></i> Export Data
+                                </button>
+                            </div>
+                            
                             <div class="section-info">
                                 <span class="info-badge">Section: <?php echo htmlspecialchars($advisor_section); ?></span>
                                 <span class="info-badge">Course: <?php echo htmlspecialchars($advisor_course); ?></span>
@@ -396,41 +1061,43 @@ try {
                     <?php endif; ?>
 
                      <!-- Show entries and Search-->
-                            <div class="table-controls-row">
-                                <div class="entries-selector">
-                                    <span>Show</span>
-                                    <select name="entries" onchange="this.form.submit()" class="entries-select">
-                                        <?php
-                                        $entries_options = [5, 10, 25, 50];
-                                        $selected_entries = $_GET['entries'] ?? 5;
-                                        
-                                        foreach ($entries_options as $option) {
-                                            $selected = ($option == $selected_entries) ? 'selected' : '';
-                                            echo "<option value='$option' $selected>$option</option>";
-                                        }
-                                        ?>
-                                    </select>
-                                    <span>entries</span>
-                                </div>
-
-                                <form class="modern-search" method="GET" action="">
-                                    <div class="search-container">
-                                        <i class="fas fa-search"></i>
-                                        <input type="text" name="search" placeholder="Search here..." class="search-input" 
-                                            value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
+                    <div class="table-controls-row">
+                        <form class="modern-search" method="GET" action="">
+                            <div class="entries-selector">
+                                <span>Show</span>
+                                <select name="entries" onchange="this.form.submit()" class="entries-select">
+                                    <?php
+                                    $entries_options = [5, 10, 25, 50];
+                                    $selected_entries = $_GET['entries'] ?? 5;
                                     
-                                        <?php foreach ($_GET as $key => $value): ?>
-                                            <?php if ($key !== 'search' && $key !== 'page'): ?>
-                                                <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
-                                            <?php endif; ?>
-                                        <?php endforeach; ?>
-                                    </div>
-                                </form>
+                                    foreach ($entries_options as $option) {
+                                        $selected = ($option == $selected_entries) ? 'selected' : '';
+                                        echo "<option value='$option' $selected>$option</option>";
+                                    }
+                                    ?>
+                                </select>
+                                <span>entries</span>
                             </div>
+
+                            <div class="search-container">
+                                <i class="fas fa-search"></i>
+                                <input type="text" name="search" placeholder="Search here..." class="search-input" 
+                                    value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
+                            
+                                <!-- Preserve all GET parameters except page and entries -->
+                                <?php foreach ($_GET as $key => $value): ?>
+                                    <?php if ($key !== 'search' && $key !== 'page' && $key !== 'entries'): ?>
+                                        <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
+                                    <?php endif; ?>
+                                <?php endforeach; ?>
+                            </div>
+                        </form>
+                    </div>
 
                     <!-- Students Table -->
                     <?php
-                    $students_per_page = 5; // How many students per page
+                    // Use the selected entries value for pagination
+                    $students_per_page = $_GET['entries'] ?? 5;
                     $total_students = count($students);
                     $total_pages = ceil($total_students / $students_per_page);
                     $current_page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
@@ -552,105 +1219,60 @@ try {
         </div>
     </div>
 
-    <!-- Add/Edit Student Modal -->
-    <div id="studentModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 id="studentModalTitle">Add New Student</h3>
-                <span class="close" onclick="closeStudentModal()">&times;</span>
-            </div>
-            <div class="modal-body">
-                <form id="studentForm">
-                    <input type="hidden" id="studentId" name="student_id">
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label for="firstName">First Name *</label>
-                            <input type="text" id="firstName" name="first_name" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="lastName">Last Name *</label>
-                            <input type="text" id="lastName" name="last_name" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="middleName">Middle Name</label>
-                            <input type="text" id="middleName" name="middle_name">
-                        </div>
-                        <div class="form-group">
-                            <label>Section *</label>
-                            <div class="form-group">
-
-                            <select name="section" id="sectionSelect" required>
-                                <option value="">Select Section</option>
-                                <?php foreach ($available_sections as $section): ?>
-                                    <option value="<?= htmlspecialchars($section) ?>"><?= htmlspecialchars($section) ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-
-                        </div>
+    
+<!-- Student Edit Modal -->
+<div id="studentModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="studentModalTitle">Edit Student</h3>
+            <span class="close" onclick="closeStudentModal()">&times;</span>
+        </div>
+        <div class="modal-body">
+            <form id="studentForm">
+                <input type="hidden" id="studentId" name="student_id">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="firstName">First Name *</label>
+                        <input type="text" id="firstName" name="first_name" required>
                     </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-primary" onclick="saveStudent()">
-                    <i class="fas fa-save"></i> Save Student
-                </button>
-                <button class="btn-secondary" onclick="closeStudentModal()">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
-            </div>
+                    <div class="form-group">
+                        <label for="middleName">Middle Name</label>
+                        <input type="text" id="middleName" name="middle_name">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="lastName">Last Name *</label>
+                        <input type="text" id="lastName" name="last_name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="email">Email *</label>
+                        <input type="email" id="email" name="email" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="section">Section *</label>
+                    <select id="section" name="section" required>
+                        <option value="">Select Section</option>
+                        <?php foreach ($available_sections as $section): ?>
+                            <option value="<?php echo htmlspecialchars($section); ?>"><?php echo htmlspecialchars($section); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-primary" onclick="saveStudent()">
+                <i class="fas fa-save"></i> Save Changes
+            </button>
+            <button class="btn-secondary" onclick="closeStudentModal()">
+                Cancel
+            </button>
         </div>
     </div>
+</div>
 
-    <!-- Student Credentials Modal -->
-    <div id="credentialsModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3><i class="fas fa-check-circle text-success"></i> Student Account Created!</h3>
-                <span class="close" onclick="closeCredentialsModal()">&times;</span>
-            </div>
-            <div class="modal-body">
-                <div class="success-message">
-                    <i class="fas fa-graduation-cap"></i>
-                    <p>The student account has been created successfully!</p>
-                </div>
-                
-                <div class="credentials-box">
-                    <h4><i class="fas fa-key"></i> Login Credentials</h4>
-                    <div class="credential-item">
-                        <label>Student Name:</label>
-                        <span id="credentialName"></span>
-                    </div>
-                    <div class="credential-item">
-                        <label>Student ID:</label>
-                        <span id="credentialStudentId"></span>
-                    </div>
-                    <div class="credential-item">
-                        <label>Email:</label>
-                        <span id="credentialEmail"></span>
-                    </div>
-                    <div class="credential-item">
-                        <label>Temporary Password:</label>
-                        <span id="credentialPassword" class="password-highlight"></span>
-                    </div>
-                </div>
-                
-                <div class="alert alert-info">
-                    <i class="fas fa-info-circle"></i>
-                    <strong>Important:</strong> Please share these credentials with the student. They will be required to change their password on first login.
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-secondary" onclick="copyCredentials()">
-                    <i class="fas fa-copy"></i> Copy Credentials
-                </button>
-                <button class="btn-primary" onclick="closeCredentialsModal()">
-                    <i class="fas fa-check"></i> Got it
-                </button>
-            </div>
-        </div>
-    </div>
-
+   
    <!-- Confirmation Modal -->
     <div id="confirmModal" class="modal">
         <div class="modal-content">
@@ -672,6 +1294,70 @@ try {
         </div>
     </div>
 
+    <!-- CSV Import Modal -->
+<div id="importModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Import Students from CSV</h3>
+            <span class="close" onclick="closeImportModal()">&times;</span>
+        </div>
+        <div class="modal-body">
+            <div class="import-instructions">
+                <p><strong>CSV Format Requirements:</strong></p>
+                <ul>
+                    <li>File is in CSV format</li>
+                    <li>Sections must be one of: 
+                        <?php 
+                        if (!empty($available_sections)) {
+                            echo implode(', ', $available_sections);
+                        } else {
+                            echo 'No sections assigned';
+                        }
+                        ?>
+                    </li>
+                    
+                <div class="download-template">
+                    <a href="javascript:void(0)" onclick="exportCSV('template')">
+                        <i class="fas fa-download"></i> Download template
+                    </a>
+                </div>
+
+                </ul>
+
+            
+            <form id="importForm" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label for="csvFile">Select CSV File</label>
+                    <input type="file" id="csvFile" name="csv_file" accept=".csv" required>
+                </div>
+            </form>
+            
+            <div id="importResults" style="display: none;">
+                <h4>Import Results</h4>
+                <div id="importSuccess" class="alert alert-success"></div>
+                <div id="importErrors" class="alert alert-error"></div>
+            </div>
+        </div>
+                        <!-- Loading indicator -->
+                    <div id="importLoading" class="loading-indicator" style="display: none;">
+                        <div class="spinner"></div>
+                        <span>Importing students, please wait...</span>
+                    </div>
+                    <!-- End Loading indicator -->
+            <div class="modal-footer">
+                <button id="importButton" type="button" class="btn-primary" onclick="submitImport()">
+                    <i class="fas fa-upload"></i> Import
+                </button>
+                <button type="button" class="btn-secondary" onclick="closeImportModal()">
+                    Cancel
+                </button>
+            </div>
+
+    </div>
+</div>
+
     <script src="../JS/advisor_student-management.js"></script>
+  
 </body>
+    <script src="../JS/session_timeout.js"></script>
 </html>

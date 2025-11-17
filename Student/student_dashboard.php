@@ -1,19 +1,18 @@
 <?php
-session_start();
+require_once __DIR__ . '/../auth.php';
+
+// Enforce centralized session timeout and require the student role
+enforceSessionTimeout();
+requireRole(['student']);
+
 require_once '../db/db.php';
 
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'student') {
-    header('Location: ../student_login.php');
-    exit();
-}
-
-
 $user_id = $_SESSION['user_id'];
-$user_name = $_SESSION['name'];
+$user_name = $_SESSION['name'] ?? '';
+$user_section = $_SESSION['section'] ?? null;
 
 // In your dashboard PHP code where you fetch the profile picture:
 $profile_picture = '../images/default-user.png'; // Default image
-
 try {
     // Get student's profile picture path
     $stmt = $pdo->prepare("SELECT profile_picture FROM students WHERE id = ?");
@@ -33,8 +32,6 @@ try {
 } catch (PDOException $e) {
     error_log("Database error fetching profile picture: " . $e->getMessage());
 }
-
-
 
 $user_section = null;
 $userGroup = null;
@@ -74,14 +71,17 @@ $groupMembers = $membersQuery->fetchAll(PDO::FETCH_ASSOC);
 
 }
 
+// Fetch chapters for the student's group
 $chapters = [];
-if ($userGroup) {
+if ($userGroup && isset($userGroup['group_id'])) {
     $chaptersQuery = $pdo->prepare("
-        SELECT * FROM chapters
-        WHERE group_id = ?
+        SELECT *, 
+               (SELECT COUNT(*) FROM chapters c2 WHERE c2.group_id = chapters.group_id AND c2.chapter_number = chapters.chapter_number) as total_versions
+        FROM chapters
+        WHERE group_id = ? AND is_current = 1
         ORDER BY chapter_number
     ");
-    $chaptersQuery->execute([$userGroup['id']]);
+    $chaptersQuery->execute([$userGroup['group_id']]);
     $chapters = $chaptersQuery->fetchAll(PDO::FETCH_ASSOC);
 }
 
@@ -105,8 +105,101 @@ foreach ($chapters as $chapter) {
 }
 $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapters) * 100 : 0;
 
+// Fetch notifications
+$notifications = [];
+$unread_notifications_count = 0;
 
+try {
+    // Get notifications
+    $notificationsQuery = $pdo->prepare("
+        SELECT * FROM notifications 
+        WHERE user_id = ? 
+        ORDER BY created_at DESC 
+        LIMIT 5
+    ");
+    $notificationsQuery->execute([$user_id]);
+    $notifications = $notificationsQuery->fetchAll(PDO::FETCH_ASSOC);
+
+    // Count unread notifications
+    $unreadQuery = $pdo->prepare("
+        SELECT COUNT(*) as unread_count 
+        FROM notifications 
+        WHERE user_id = ? AND is_read = 0
+    ");
+    $unreadQuery->execute([$user_id]);
+    $unread_result = $unreadQuery->fetch(PDO::FETCH_ASSOC);
+    $unread_notifications_count = $unread_result['unread_count'] ?? 0;
+
+} catch (PDOException $e) {
+    error_log("Database error fetching notifications: " . $e->getMessage());
+}
+
+// Handle AJAX requests for notifications
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
     
+    try {
+        switch ($_POST['action']) {
+            case 'mark_as_read':
+                if (isset($_POST['notification_id'])) {
+                    // Mark single notification as read
+                    $markReadStmt = $pdo->prepare("
+                        UPDATE notifications 
+                        SET is_read = 1 
+                        WHERE id = ? AND user_id = ?
+                    ");
+                    $markReadStmt->execute([$_POST['notification_id'], $user_id]);
+                    echo json_encode(['success' => true]);
+                }
+                break;
+
+            case 'mark_all_read':
+                // Mark all notifications as read for this user
+                $markAllReadStmt = $pdo->prepare("
+                    UPDATE notifications 
+                    SET is_read = 1 
+                    WHERE user_id = ? AND is_read = 0
+                ");
+                $markAllReadStmt->execute([$user_id]);
+                echo json_encode(['success' => true, 'message' => 'All notifications marked as read.']);
+                break;
+
+            case 'get_notifications':
+                // Return updated notifications
+                $notificationsQuery = $pdo->prepare("
+                    SELECT * FROM notifications 
+                    WHERE user_id = ? 
+                    ORDER BY created_at DESC 
+                    LIMIT 5
+                ");
+                $notificationsQuery->execute([$user_id]);
+                $updated_notifications = $notificationsQuery->fetchAll(PDO::FETCH_ASSOC);
+                
+                $unreadQuery = $pdo->prepare("
+                    SELECT COUNT(*) as unread_count 
+                    FROM notifications 
+                    WHERE user_id = ? AND is_read = 0
+                ");
+                $unreadQuery->execute([$user_id]);
+                $unread_result = $unreadQuery->fetch(PDO::FETCH_ASSOC);
+                $updated_unread_count = $unread_result['unread_count'] ?? 0;
+                
+                echo json_encode([
+                    'success' => true,
+                    'notifications' => $updated_notifications,
+                    'unread_count' => $updated_unread_count
+                ]);
+                break;
+
+            default:
+                echo json_encode(['success' => false, 'message' => 'Invalid action']);
+        }
+    } catch (PDOException $e) {
+        error_log("Notification action error: " . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+    exit;
+}
 
 ?>
 
@@ -156,16 +249,32 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
            </a>
 
             <!-- Logout Confirmation Modal for SIDEBAR -->
-            <div id="logoutModal" class="modal">
-            <div class="modal-content">
-                <h3>Confirm Logout</h3>
-                <p>Are you sure you want to logout?</p>
-                <div class="modal-buttons">
-                <button id="confirmLogout" class="btn btn-danger">Yes, Logout</button>
-                <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
+<!-- Enhanced logout confirmation modal -->
+        <div id="logoutModal" class="modal">
+            <div class="modal-content modal-centered">
+                <div class="modal-header">
+                    <h3 class="modal-title">Confirm Logout</h3>
+                    <button class="close-modal" onclick="closeLogoutModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="logout-confirmation">
+                        <div class="logout-icon">
+                            <i class="fas fa-sign-out-alt"></i>
+                        </div>
+                        <p>Are you sure you want to logout from ThesisTrack?</p>
+                        <p class="logout-note">You will need to login again to access your dashboard.</p>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-modal btn-cancel" id="cancelLogout" onclick="closeLogoutModal()">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>
+                    <button class="btn-modal btn-danger" id="confirmLogout" onclick="confirmLogout()">
+                        <i class="fas fa-sign-out-alt"></i> Yes, Logout
+                    </button>
                 </div>
             </div>
-            </div>
+        </div>
 
         </aside>
            <!-- End Sidebar -->
@@ -176,8 +285,54 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
              <div class="topbar-left">
     </div>
                 <div class="topbar-right">
-                <button class="topbar-icon" title="Notifications">
-                <i class="fas fa-bell"></i></button>
+<!-- Notification Dropdown -->
+                    <div class="notification-dropdown">
+                        <button class="topbar-icon" title="Notifications" id="notificationBtn">
+                            <i class="fas fa-bell"></i>
+                            <?php if ($unread_notifications_count > 0): ?>
+                                <span class="notification-badge" id="notificationBadge">
+                                    <?php echo $unread_notifications_count > 9 ? '9+' : $unread_notifications_count; ?>
+                                </span>
+                            <?php endif; ?>
+                        </button>
+                        <div class="notification-menu" id="notificationMenu">
+                            <div class="notification-header">
+                                <h4>Notifications</h4>
+                                <?php if ($unread_notifications_count > 0): ?>
+                                    <button class="mark-all-read" id="markAllRead">Mark all as read</button>
+                                <?php endif; ?>
+                            </div>
+                            <div class="notification-list" id="notificationList">
+                                <?php if (!empty($notifications)): ?>
+                                    <?php foreach ($notifications as $notification): ?>
+                                        <div class="notification-item <?php echo $notification['is_read'] ? '' : 'unread'; ?>" 
+                                             data-id="<?php echo $notification['id']; ?>">
+                                            <span class="notification-type type-<?php echo $notification['type'] ?? 'info'; ?>">
+                                                <?php echo ucfirst($notification['type'] ?? 'info'); ?>
+                                            </span>
+                                            <div class="notification-title">
+                                                <?php echo htmlspecialchars($notification['title']); ?>
+                                            </div>
+                                            <div class="notification-message">
+                                                <?php echo htmlspecialchars($notification['message']); ?>
+                                            </div>
+                                            <div class="notification-time">
+                                                <?php echo date('M d, Y g:i A', strtotime($notification['created_at'])); ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="no-notifications">
+                                        <i class="fas fa-bell-slash"></i>
+                                        <p>No notifications</p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            <a href="#" class="view-all-notifications">
+                                View All Notifications
+                            </a>
+                        </div>
+                    </div>
                 <div class="user-info dropdown">
                <!-- In the header -->
 <img src="<?php echo htmlspecialchars($profile_picture); ?>"
@@ -186,7 +341,7 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
      id="userAvatar"
      tabindex="0" />
         <div class="dropdown-menu" id="userDropdown">
-          <a href="#" class="dropdown-item">
+          <a href="student_settings.php" class="dropdown-item">
             <i class="fas fa-cog"></i> Settings
           </a>
          <a href="#" class="dropdown-item" id="logoutLink">
@@ -237,7 +392,7 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
                             <p><?php echo $completedChapters; ?> of <?php echo $totalChapters; ?> Chapters Completed</p>
                         </div>
 
-                        <div class="card status-card">
+                         <div class="card status-card">
                             <h3 style="color: #1a202c; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
                                 Chapter Status Overview
                             </h3>
@@ -246,22 +401,22 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
                                 <?php
                                 $chapterNames = [
                                     1 => 'Introduction',
-                                    2 => 'Literature Review',
+                                    2 => 'Review of Related Literature',
                                     3 => 'Methodology',
                                     4 => 'Results & Discussion',
-                                    5 => 'Conclusion'
+                                    5 => 'Summary, Conclusion, and Recommendation'
                                 ];
                                 for ($i = 1; $i <= 5; $i++):
                                     $chapterStatus = 'not_submitted';
                                     $chapterTitle = $chapterNames[$i];
+                                    // start of change for version 10
                                     foreach ($chapters as $chapter) {
                                         if ($chapter['chapter_number'] == $i) {
                                             $chapterStatus = $chapter['status'];
-                                            // If you want to use the actual title from DB, uncomment below
-                                            // $chapterTitle = htmlspecialchars($chapter['chapter_name']);
                                             break;
                                         }
                                     }
+                                    // end of change for version 10
                                 ?>
                                     <div class="status-item">
                                         <span class="chapter">Chapter <?php echo $i; ?>: <?php echo $chapterTitle; ?></span>
@@ -325,6 +480,8 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
 </div>
    
 
-        <script src="../JS/student_dashboard.js"></script>
+    <script src="../JS/student_dashboard.js"></script>
+    <link rel="stylesheet" href="../CSS/session_timeout.css">
+    <script src="../JS/session_timeout.js"></script>
 </body>
 </html>

@@ -1,17 +1,16 @@
 <?php
-session_start();
-require_once '../db/db.php';
+require_once __DIR__ . '/../auth.php';
+requireRole(['coordinator']);
+require_once __DIR__ . '/../db/db.php';
+// Add PHPMailer requirement
+require_once __DIR__ . '/../vendor/autoload.php';  
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
+
 // Optional: Prevent PHP from outputting warnings to the browser
 ini_set('display_errors', 0);
 ini_set('log_errors', 1);
 ini_set('error_log', __DIR__ . '/error_log.txt');
-
-// Check coordinator session
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'coordinator') {
-    header('Location: ../login.php');
-    exit();
-}
-
 
 // ==================== V7 UPDATE 
 // In your coordinator session verification code:
@@ -34,7 +33,103 @@ try {
 }
 // =================END OF V7 UPDATE
 
-
+// Function to send email using PHPMailer
+function sendAdvisorCredentials($email, $firstName, $lastName, $employeeId,$section, $tempPassword) {
+    $mail = new PHPMailer(true);
+    
+    try {
+        // Server settings
+        $mail->isSMTP();
+        $mail->Host = 'smtp.gmail.com';
+        $mail->SMTPAuth = true;
+        $mail->Username = 'klarerivera25@gmail.com'; // Your Gmail address
+        $mail->Password = 'bztg uiur xzho wslv'; // Your Gmail app password
+        $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        $mail->Port = 587;
+        
+        // Recipients
+        $mail->setFrom('klarerivera25@gmail.com', 'ThesisTrack System');
+        $mail->addAddress($email, $firstName . ' ' . $lastName);
+        
+        // Content
+        $mail->isHTML(true);
+        $mail->Subject = 'Your ThesisTrack Advisor Account Credentials';
+        
+        $mail->Body = "
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                    .header { background-color: #4a86e8; color: white; padding: 15px; text-align: center; border-radius: 5px 5px 0 0; }
+                    .content { background-color: #f9f9f9; padding: 20px; border-radius: 0 0 5px 5px; }
+                    .credentials { background-color: #fff; padding: 15px; border: 1px solid #ddd; border-radius: 5px; margin: 15px 0; }
+                    .footer { margin-top: 20px; font-size: 12px; color: #777; text-align: center; }
+                    .important { color: #e74c3c; font-weight: bold; }
+                </style>
+            </head>
+            <body>
+                <div class='container'>
+                    <div class='header'>
+                        <h2>ThesisTrack Advisor Account</h2>
+                    </div>
+                    <div class='content'>
+                        <p>Dear $firstName $lastName,</p>
+                        <p>Your advisor account has been successfully created in the ThesisTrack system.</p>
+                        
+                        <div class='credentials'>
+                            <h3>Your Login Credentials:</h3>
+                            <p><strong>Email:</strong> $email</p>
+                            <p><strong>Employee ID:</strong> $employeeId</p>
+                            <p><strong>Assigned Section:</strong> $section</p>
+                            <p><strong>Temporary Password:</strong> $tempPassword</p>
+                        </div>
+                        
+                        <p class='important'>Important: You will be required to change your password upon first login for security purposes.</p>
+                        
+                        <p>You can access the system at: <a href='http://tcu-thesistrack/login.php'>http://tcu-thesistrack/login.php</a></p>
+                        
+                        <p>If you have any questions, please contact the system administrator or the research coordinator.</p>
+                    </div>
+                    <div class='footer'>
+                        <p>This is an automated message. Please do not reply to this email.</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+        ";
+        
+        // Alternative plain text version for non-HTML mail clients
+        $mail->AltBody = "
+            ThesisTrack Advisor Account
+            
+            Dear $firstName $lastName,
+            
+            Your advisor account has been successfully created in the ThesisTrack system.
+            
+            Your Login Credentials:
+            Email: $email
+            Employee ID: $employeeId
+            Assigned Section: $section
+            Temporary Password: $tempPassword
+            
+            Important: You will be required to change your password upon first login for security purposes.
+            
+            You can access the system at: http://tcu-thesistrack.com/login.php
+            
+            If you have any questions, please contact the system administrator or the research coordinator.
+            
+            This is an automated message. Please do not reply to this email.
+        ";
+        
+        $mail->send();
+        return true;
+    } catch (Exception $e) {
+        error_log("Email sending failed: " . $mail->ErrorInfo);
+        return false;
+    }
+}
 
 // === Handle Advisor CRUD ===
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -110,12 +205,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $pdo->commit();
 
+                // Send email with credentials
+                $emailSent = sendAdvisorCredentials($email, $first_name, $last_name, $employeeId, $section,$tempPassword);
+                
+                $emailMessage = $emailSent 
+                    ? " Email with credentials has been sent to the advisor." 
+                    : " Note: Failed to send email with credentials.";
+
                 echo json_encode([
                     'success' => true,
-                    'message' => 'Advisor added successfully!',
+                    'message' => 'Advisor added successfully!' . $emailMessage,
                     'temp_password' => $tempPassword,
                     'employee_id' => $employeeId,
-                    'email' => $email
+                    'email' => $email,
+                    'email_sent' => $emailSent
                 ]);
             } catch (PDOException $e) {
                 $pdo->rollBack();
@@ -124,7 +227,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             exit();
 
-        case 'edit_advisor':
+case 'edit_advisor':
             $id = (int)$_POST['id'];
             $first_name = sanitize($_POST['first_name']);
             $middle_name = sanitize($_POST['middle_name'] ?? '');
@@ -407,12 +510,155 @@ try {
 }
 
 // === Pagination ===
-$itemsPerPage = 5;
+$itemsPerPage = $_GET['entries'] ?? 5;
 $totalAdvisors = count($advisors);
 $totalPages = ceil($totalAdvisors / $itemsPerPage);
 $currentPage = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
 $startIndex = ($currentPage - 1) * $itemsPerPage;
 $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
+
+// Notification functions
+function createCoordinatorNotification($pdo, $title, $message, $type = 'info', $group_id = null) {
+    try {
+        $stmt = $pdo->prepare("
+            INSERT INTO notifications (user_id, user_type, title, message, type, is_read, group_id, created_at) 
+            SELECT id, 'coordinator', ?, ?, ?, 0, ?, NOW() 
+            FROM coordinators 
+            WHERE status = 'active'
+        ");
+        $stmt->execute([$title, $message, $type, $group_id]);
+        return true;
+    } catch (PDOException $e) {
+        error_log("Notification error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Specific notification functions for different events
+function notifyCoordinatorChapterUpload($pdo, $group_id, $chapter_number, $chapter_name, $student_name) {
+    $title = "New Chapter Submission";
+    $message = "Group {$group_id} submitted Chapter {$chapter_number}: {$chapter_name} by {$student_name}";
+    return createCoordinatorNotification($pdo, $title, $message, 'info', $group_id);
+}
+
+function notifyCoordinatorChapterReview($pdo, $group_id, $chapter_number, $advisor_name, $status) {
+    $title = "Chapter Review Completed";
+    $message = "Advisor {$advisor_name} {$status} Chapter {$chapter_number} for Group {$group_id}";
+    return createCoordinatorNotification($pdo, $title, $message, 'success', $group_id);
+}
+
+function notifyCoordinatorAdvisorAssignment($pdo, $advisor_name, $section, $course) {
+    $title = "New Advisor Assignment";
+    $message = "{$advisor_name} assigned to {$section} ({$course})";
+    return createCoordinatorNotification($pdo, $title, $message, 'info', null);
+}
+
+function notifyCoordinatorGroupCreation($pdo, $group_name, $section, $advisor_name) {
+    $title = "New Thesis Group";
+    $message = "Group '{$group_name}' created in {$section} under {$advisor_name}";
+    return createCoordinatorNotification($pdo, $title, $message, 'info', null);
+}
+
+// Fetch coordinator-specific notifications
+try {
+    $notification_stmt = $pdo->prepare("
+        SELECT n.*, sg.group_name 
+        FROM notifications n 
+        LEFT JOIN student_groups sg ON n.group_id = sg.id 
+        WHERE n.user_type = 'coordinator' 
+        ORDER BY n.created_at DESC 
+        LIMIT 10
+    ");
+    $notification_stmt->execute();
+    $notifications = $notification_stmt->fetchAll();
+    
+    // Count unread notifications
+    $unread_stmt = $pdo->prepare("
+        SELECT COUNT(*) as unread_count 
+        FROM notifications 
+        WHERE user_type = 'coordinator' AND is_read = 0
+    ");
+    $unread_stmt->execute();
+    $unread_result = $unread_stmt->fetch();
+    $unread_notifications_count = $unread_result['unread_count'] ?? 0;
+    
+} catch (PDOException $e) {
+    error_log("Notification fetch error: " . $e->getMessage());
+    $notifications = [];
+    $unread_notifications_count = 0;
+}
+
+// Handle AJAX requests for notifications
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+    
+    if ($_POST['action'] === 'mark_as_read') {
+        if (isset($_POST['notification_id'])) {
+            // Mark single notification as read
+            $notification_id = $_POST['notification_id'];
+            try {
+                $stmt = $pdo->prepare("
+                    UPDATE notifications 
+                    SET is_read = 1 
+                    WHERE id = ? AND user_type = 'coordinator'
+                ");
+                $stmt->execute([$notification_id]);
+                echo json_encode(['success' => true]);
+            } catch (PDOException $e) {
+                error_log("Mark notification read error: " . $e->getMessage());
+                echo json_encode(['success' => false, 'message' => 'Database error']);
+            }
+        } else {
+            // Mark all as read
+            try {
+                $stmt = $pdo->prepare("
+                    UPDATE notifications 
+                    SET is_read = 1 
+                    WHERE user_type = 'coordinator' AND is_read = 0
+                ");
+                $stmt->execute();
+                echo json_encode(['success' => true]);
+            } catch (PDOException $e) {
+                error_log("Mark all notifications read error: " . $e->getMessage());
+                echo json_encode(['success' => false, 'message' => 'Database error']);
+            }
+        }
+        exit();
+    }
+    
+    if ($_POST['action'] === 'get_notifications') {
+        try {
+            $notification_stmt = $pdo->prepare("
+                SELECT n.*, sg.group_name 
+                FROM notifications n 
+                LEFT JOIN student_groups sg ON n.group_id = sg.id 
+                WHERE n.user_type = 'coordinator' 
+                ORDER BY n.created_at DESC 
+                LIMIT 10
+            ");
+            $notification_stmt->execute();
+            $notifications = $notification_stmt->fetchAll();
+            
+            $unread_stmt = $pdo->prepare("
+                SELECT COUNT(*) as unread_count 
+                FROM notifications 
+                WHERE user_type = 'coordinator' AND is_read = 0
+            ");
+            $unread_stmt->execute();
+            $unread_result = $unread_stmt->fetch();
+            $unread_count = $unread_result['unread_count'] ?? 0;
+            
+            echo json_encode([
+                'success' => true,
+                'notifications' => $notifications,
+                'unread_count' => $unread_count
+            ]);
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false, 'message' => 'Database error']);
+        }
+        exit();
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -422,6 +668,7 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="../images/book-icon.ico">
     <link rel="stylesheet" href="../CSS/coordinator_advisor-mngt.css">
+    <link rel="stylesheet" href="../CSS/session_timeout.css">
     <script src="https://kit.fontawesome.com/4ef2a0fa98.js" crossorigin="anonymous"></script>
     <title>ThesisTrack</title>
 </head>
@@ -454,18 +701,43 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
                 <a href="coordinator_advisor-mngt.php" class="nav-item active" data-tab="advisors">
                     <i class="fas fa-chalkboard-teacher"></i> Advisor Management
                 </a>
+                <a href="coordinator_thesis-titles-overview.php" class="nav-item">
+                    <i class="fas fa-book"></i> Thesis Titles Overview
+                </a>
+                <a href="coordinator_document-control-panel.php" class="nav-item">
+                    <i class="fas fa-book-open"></i> Document Control Panel
+                </a>
+                 <!-- CHANGE> Added audit logs navigation link -->
+                <a href="coordinator_audit_log.php" class="nav-item" data-tab="audit-logs">
+                    <i class="fas fa-history"></i> Audit Logs
+                </a>
                 <a href="#" id="logoutBtn" class="nav-item logout">
                     <i class="fas fa-sign-out-alt"></i> Logout
                 </a>
 
-                <!-- Logout Confirmation Modal for SIDEBAR -->
-                <div id="logoutModal" class="logout-modal" style="display:none;">
-                    <div class="logout-modal-content">
-                        <h3>Confirm Logout</h3>
-                        <p>Are you sure you want to logout?</p>
-                        <div class="modal-buttons">
-                            <button id="confirmLogout" class="logoutbtn">Yes, Logout</button>
-                            <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
+                <!-- Enhanced logout confirmation modal -->
+                <div id="logoutModal" class="modal">
+                    <div class="logoutmodal-content modal-centered">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Confirm Logout</h3>
+                            <button class="close-modal" onclick="closeLogoutModal()">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="logout-confirmation">
+                                <div class="logout-icon">
+                                    <i class="fas fa-sign-out-alt"></i>
+                                </div>
+                                <p>Are you sure you want to logout from ThesisTrack?</p>
+                                <p class="logout-note">You will need to login again to access your dashboard.</p>
+                            </div>
+                        </div>
+                        <div class="modal-actions">
+                            <button class="btn-modal btn-cancel" id="cancelLogout" onclick="closeLogoutModal()">
+                                <i class="fas fa-times"></i> Cancel
+                            </button>
+                            <button class="btn-modal btn-danger" id="confirmLogout" onclick="confirmLogout()">
+                                <i class="fas fa-sign-out-alt"></i> Yes, Logout
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -479,9 +751,54 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
             <header class="blank-header">
                 <div class="topbar-left"></div>
                 <div class="topbar-right">
-                    <button class="topbar-icon" title="Notifications">
-                        <i class="fas fa-bell"></i>
-                    </button>
+                    <!-- Notification Dropdown -->
+                    <div class="notification-dropdown">
+                        <button class="topbar-icon" title="Notifications" id="notificationBtn">
+                            <i class="fas fa-bell"></i>
+                            <?php if ($unread_notifications_count > 0): ?>
+                                <span class="notification-badge" id="notificationBadge">
+                                    <?php echo $unread_notifications_count > 9 ? '9+' : $unread_notifications_count; ?>
+                                </span>
+                            <?php endif; ?>
+                        </button>
+                        <div class="notification-menu" id="notificationMenu">
+                            <div class="notification-header">
+                                <h4>Notifications</h4>
+                                <?php if ($unread_notifications_count > 0): ?>
+                                    <button class="mark-all-read" id="markAllRead">Mark all as read</button>
+                                <?php endif; ?>
+                            </div>
+                            <div class="notification-list" id="notificationList">
+                                <?php if (!empty($notifications)): ?>
+                                    <?php foreach ($notifications as $notification): ?>
+                                        <div class="notification-item <?php echo $notification['is_read'] ? '' : 'unread'; ?>" 
+                                             data-id="<?php echo $notification['id']; ?>">
+                                            <span class="notification-type type-<?php echo $notification['type'] ?? 'info'; ?>">
+                                                <?php echo ucfirst($notification['type'] ?? 'info'); ?>
+                                            </span>
+                                            <div class="notification-title">
+                                                <?php echo htmlspecialchars($notification['title']); ?>
+                                            </div>
+                                            <div class="notification-message">
+                                                <?php echo htmlspecialchars($notification['message']); ?>
+                                            </div>
+                                            <div class="notification-time">
+                                                <?php echo date('M d, Y g:i A', strtotime($notification['created_at'])); ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="no-notifications">
+                                        <i class="fas fa-bell-slash"></i>
+                                        <p>No notifications</p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            <a href="#" class="view-all-notifications">
+                                View All Notifications
+                            </a>
+                        </div>
+                    </div>
                    <div class="user-info dropdown">
                         <img src="<?php echo htmlspecialchars($profile_picture); ?>?t=<?php echo time(); ?>" 
                             alt="User Avatar" 
@@ -490,7 +807,7 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
                             tabindex="0"
                             onerror="this.src='../images/default-user.png'" />
                         <div class="dropdown-menu" id="userDropdown">
-                            <a href="#" class="dropdown-item">
+                            <a href="coordinator_settings.php" class="dropdown-item">
                                 <i class="fas fa-cog"></i> Settings
                             </a>
                             <a href="#" id="logoutLink" class="dropdown-item">
@@ -542,37 +859,46 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
 
 
                                     <!-- show entries -->
-                            <div class="table-controls-row">
-                                <div class="entries-selector">
-                                    <span>Show</span>
-                                    <select name="entries" onchange="this.form.submit()" class="entries-select">
-                                        <?php
-                                        $entries_options = [5, 10, 25, 50];
-                                        $selected_entries = $_GET['entries'] ?? 5;
-                                        
-                                        foreach ($entries_options as $option) {
-                                            $selected = ($option == $selected_entries) ? 'selected' : '';
-                                            echo "<option value='$option' $selected>$option</option>";
-                                        }
-                                        ?>
-                                    </select>
-                                    <span>entries</span>
-                                </div>
+                                    <div class="table-controls-row">
+                                        <form method="GET" action="" class="entries-form">
+                                            <div class="entries-selector">
+                                                <span>Show</span>
+                                                <select name="entries" onchange="this.form.submit()" class="entries-select">
+                                                    <?php
+                                                    $entries_options = [5, 10, 25, 50];
+                                                    $selected_entries = $_GET['entries'] ?? 5;
+                                                    
+                                                    foreach ($entries_options as $option) {
+                                                        $selected = ($option == $selected_entries) ? 'selected' : '';
+                                                        echo "<option value='$option' $selected>$option</option>";
+                                                    }
+                                                    ?>
+                                                </select>
+                                                <span>entries</span>
+                                            </div>
+                                            
+                                            <!-- Preserve other GET parameters -->
+                                            <?php foreach ($_GET as $key => $value): ?>
+                                                <?php if ($key !== 'entries' && $key !== 'page'): ?>
+                                                    <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
+                                                <?php endif; ?>
+                                            <?php endforeach; ?>
+                                        </form>
 
-                                <form class="modern-search" method="GET" action="">
-                                    <div class="search-container">
-                                        <i class="fas fa-search"></i>
-                                        <input type="text" name="search" placeholder="Search here..." class="search-input" 
-                                            value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
-                                        <!-- Preserve other GET parameters -->
-                                        <?php foreach ($_GET as $key => $value): ?>
-                                            <?php if ($key !== 'search' && $key !== 'page'): ?>
-                                                <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
-                                            <?php endif; ?>
-                                        <?php endforeach; ?>
-                                    </div>
-                                </form>
-                            </div>
+                                        <form class="modern-search" method="GET" action="">
+                                            <div class="search-container">
+                                                <i class="fas fa-search"></i>
+                                                <input type="text" name="search" placeholder="Search here..." class="search-input" 
+                                                    value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
+                                                <!-- Preserve other GET parameters including entries -->
+                                                <?php foreach ($_GET as $key => $value): ?>
+                                                    <?php if ($key !== 'search' && $key !== 'page'): ?>
+                                                        <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
+                                                    <?php endif; ?>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        </form>
+                                    </div>  
 
                                     <thead>
                                 <tr>
@@ -839,60 +1165,12 @@ $paginatedAdvisors = array_slice($advisors, $startIndex, $itemsPerPage);
                     </div>
                 </div>
 
-                <!-- Password Display Modal -->
-                <div id="passwordModal" class="modal">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3><i class="fas fa-check-circle" style="color: #48bb78;"></i> Advisor Account Created Successfully!</h3>
-                            <span class="close" onclick="closePasswordModal()">&times;</span>
-                        </div>
-                        <div class="modal-body">
-                            <div style="text-align: center; margin-bottom: 2rem;">
-                                <i class="fas fa-check-circle" style="font-size: 4rem; color: #48bb78; margin-bottom: 1rem;"></i>
-                                <p style="font-size: 1.2rem;"><strong>The advisor account has been created successfully!</strong></p>
-                            </div>
-                            
-                            <div style="background: linear-gradient(135deg, #f8f9fa, #e9ecef); padding: 2rem; border-radius: 12px; margin: 1rem 0; border-left: 4px solid #48bb78;">
-                                <h4 style="margin-bottom: 1.5rem; color: #2d3748; font-size: 1.25rem;">
-                                    <i class="fas fa-key"></i> Login Credentials:
-                                </h4>
-                                <div style="display: grid; gap: 1rem;">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; background: white; border-radius: 8px;">
-                                        <span style="font-weight: 600;"><i class="fas fa-envelope"></i> Email:</span>
-                                        <span id="createdEmail" style="font-family: 'Courier New', monospace; background: #e2e8f0; padding: 0.5rem; border-radius: 6px; font-weight: 500;"></span>
-                                    </div>
-                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; background: white; border-radius: 8px;">
-                                        <span style="font-weight: 600;"><i class="fas fa-lock"></i> Temporary Password:</span>
-                                        <span id="tempPassword" style="font-family: 'Courier New', monospace; background: #fed7d7; padding: 0.5rem; border-radius: 6px; font-weight: bold; color: #c53030;"></span>
-                                    </div>
-                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; background: white; border-radius: 8px;">
-                                        <span style="font-weight: 600;"><i class="fas fa-id-badge"></i> Employee ID:</span>
-                                        <span id="employeeId" style="font-family: 'Courier New', monospace; background: #e2e8f0; padding: 0.5rem; border-radius: 6px; font-weight: 500;"></span>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div style="background: linear-gradient(135deg, #fef5e7, #fed7aa); padding: 1.5rem; border-radius: 12px; border-left: 4px solid #f59e0b;">
-                                <p style="color: #92400e; font-size: 1rem; margin: 0; line-height: 1.6;">
-                                    <i class="fas fa-exclamation-triangle"></i> 
-                                    <strong>Important:</strong> Please share these credentials with the advisor. They will be required to change their password on first login for security purposes.
-                                </p>
-                            </div>
-                        </div>
-                        <div class="modal-footer">
-                            <button class="btn-secondary" onclick="copyCredentials()">
-                                <i class="fas fa-copy"></i> Copy Credentials
-                            </button>
-                            <button class="btn-primary" onclick="closePasswordModal()">
-                                <i class="fas fa-check"></i> Got it
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                
             </main>
         </div>
     </div>
 
     <script src="../JS/coordinator_advisor-mngt.js"></script>
 </body>
+    <script src="../JS/session_timeout.js"></script>
 </html>

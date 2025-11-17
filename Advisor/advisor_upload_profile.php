@@ -2,17 +2,17 @@
 // Add this at the very top to catch all output
 ob_start();
 
-session_start();
-require_once '../db/db.php';
+require_once __DIR__ . '/../auth.php';
+requireRole(['advisor']);
+
+require_once __DIR__ . '/../db/db.php';
 
 // Set headers first to prevent any output
 header('Content-Type: application/json');
 
 try {
-    // Check if advisor is logged in
-    if (!isset($_SESSION['user_id'])) {
-        throw new Exception('Unauthorized access');
-    }
+    // Advisor is authenticated via requireRole
+    $advisor_id = $_SESSION['user_id'];
 
     $advisor_id = $_SESSION['user_id'];
 

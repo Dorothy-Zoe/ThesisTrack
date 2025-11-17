@@ -24,8 +24,37 @@ document.addEventListener("DOMContentLoaded", () => {
     // Welcome message
     showMessage("Welcome to your CICT thesis dashboard!", "info");
 
-    // Initialize logout functionality
-    initLogout();
+    // Logout functionality
+  const logoutBtn = document.getElementById("logoutBtn")
+  const logoutLink = document.getElementById("logoutLink")
+  const logoutModal = document.getElementById("logoutModal")
+
+  if (logoutModal) {
+    const showModal = (e) => {
+      if (e) e.preventDefault()
+      logoutModal.classList.add("show")
+    }
+
+    const hideModal = () => {
+      logoutModal.classList.remove("show")
+    }
+
+    if (logoutBtn) logoutBtn.addEventListener("click", showModal)
+    if (logoutLink) logoutLink.addEventListener("click", showModal)
+
+    // Close modal when clicking outside
+    logoutModal.addEventListener("click", (e) => {
+      if (e.target === logoutModal) {
+        hideModal()
+      }
+    })
+
+    // Make closeLogoutModal and confirmLogout globally available
+    window.closeLogoutModal = hideModal
+    window.confirmLogout = () => {
+      window.location.href = "../logout.php"
+    }
+  }
 });
 
 // Show notification messages
@@ -288,3 +317,490 @@ style.textContent = `
 document.head.appendChild(style);
 
 // ==================== END OF V7 UPDATE ====================
+
+
+// =============== Start of version 11 update =============== 
+
+
+    // =============== Notification functionality ===============
+document.addEventListener('DOMContentLoaded', function() {
+    initializeNotificationSystem();
+});
+
+    // Session keep-alive: ping server when the user is active to prevent session timeout
+    (function() {
+        let activity = false;
+        const KEEP_ALIVE_INTERVAL = 4 * 60 * 1000; // 4 minutes
+
+        function markActivity() {
+            activity = true;
+        }
+
+        ['mousemove', 'keydown', 'scroll', 'click', 'touchstart'].forEach(evt => {
+            window.addEventListener(evt, markActivity, {passive: true});
+        });
+
+        setInterval(() => {
+            if (!activity) return;
+            activity = false;
+            fetch('Student/student_dashboard.php?keep_alive=1', { credentials: 'same-origin' })
+                .then(resp => resp.json())
+                .then(data => {
+                    // optionally handle keep-alive response
+                    // console.log('keep-alive', data);
+                })
+                .catch(err => {
+                    // ignore network errors
+                });
+        }, KEEP_ALIVE_INTERVAL);
+    })();
+
+function initializeNotificationSystem() {
+    const notificationBtn = document.getElementById('notificationBtn');
+    const notificationMenu = document.getElementById('notificationMenu');
+    const markAllReadBtn = document.getElementById('markAllRead');
+    const notificationList = document.getElementById('notificationList');
+
+    // Toggle notification dropdown
+    if (notificationBtn && notificationMenu) {
+        notificationBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            notificationMenu.classList.toggle('show');
+            
+            // Mark as read when opening (optional)
+            if (notificationMenu.classList.contains('show')) {
+                // You can auto-mark as read when opening, or leave it manual
+            }
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function() {
+            notificationMenu.classList.remove('show');
+        });
+
+        // Prevent dropdown from closing when clicking inside
+        notificationMenu.addEventListener('click', function(e) {
+            e.stopPropagation();
+        });
+    }
+
+    // Mark all as read
+    if (markAllReadBtn) {
+        markAllReadBtn.addEventListener('click', function() {
+            markAllNotificationsAsRead();
+        });
+    }
+
+    // Mark individual notification as read when clicked
+    if (notificationList) {
+        notificationList.addEventListener('click', function(e) {
+            const notificationItem = e.target.closest('.notification-item');
+            if (notificationItem && notificationItem.classList.contains('unread')) {
+                const notificationId = notificationItem.getAttribute('data-id');
+                markNotificationAsRead(notificationId, notificationItem);
+            }
+        });
+    }
+
+    // Auto-refresh notifications every 30 seconds
+    setInterval(refreshNotifications, 30000);
+}
+
+function markAllNotificationsAsRead() {
+    console.log('Marking all notifications as read...');
+    
+    fetch('student_dashboard.php', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'action=mark_all_read'
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        console.log('Mark all read response:', data);
+        if (data.success) {
+            // Remove unread class from all notifications
+            document.querySelectorAll('.notification-item.unread').forEach(item => {
+                item.classList.remove('unread');
+            });
+            
+            // Hide the mark all read button
+            const markAllReadBtn = document.getElementById('markAllRead');
+            if (markAllReadBtn) {
+                markAllReadBtn.style.display = 'none';
+            }
+            
+            // Remove notification badge completely
+            const badge = document.getElementById('notificationBadge');
+            if (badge) {
+                badge.remove();
+            }
+            
+            // Show success message
+            showFlashMessage('All notifications marked as read', 'success');
+        } else {
+            throw new Error(data.message || 'Failed to mark all as read');
+        }
+    })
+    .catch(error => {
+        console.error('Error marking all notifications as read:', error);
+        showFlashMessage('Error marking notifications as read: ' + error.message, 'error');
+    });
+}
+
+function refreshNotifications() {
+    fetch('student_dashboard.php', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'action=get_notifications'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            updateNotificationDisplay(data.notifications, data.unread_count);
+        }
+    })
+    .catch(error => console.error('Error refreshing notifications:', error));
+}
+
+function updateNotificationDisplay(notifications, unreadCount) {
+    // Update notification badge
+    updateNotificationBadgeCount(unreadCount);
+    
+    // You can implement full notification list update here if needed
+    // For now, we'll just update the badge count
+}
+
+function updateNotificationBadgeCount(unreadCount) {
+    const badge = document.getElementById('notificationBadge');
+    const notificationBtn = document.getElementById('notificationBtn');
+    
+    if (unreadCount > 0) {
+        if (!badge) {
+            const newBadge = document.createElement('span');
+            newBadge.className = 'notification-badge';
+            newBadge.id = 'notificationBadge';
+            newBadge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+            notificationBtn.appendChild(newBadge);
+        } else {
+            badge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+        }
+        
+        // Show mark all read button if there are unread notifications
+        const markAllReadBtn = document.getElementById('markAllRead');
+        if (markAllReadBtn) {
+            markAllReadBtn.style.display = 'block';
+        }
+    } else {
+        // Remove badge if no unread notifications
+        if (badge) {
+            badge.remove();
+        }
+        
+        // Hide mark all read button
+        const markAllReadBtn = document.getElementById('markAllRead');
+        if (markAllReadBtn) {
+            markAllReadBtn.style.display = 'none';
+        }
+    }
+}
+
+function updateNotificationBadge() {
+    // Count remaining unread notifications in the DOM
+    const unreadCount = document.querySelectorAll('.notification-item.unread').length;
+    updateNotificationBadgeCount(unreadCount);
+}
+
+
+       
+// ===============  End of version 11 update =============== 
+
+// // Session Timeout for Testing (5 minutes total, 1 minute warning)
+// class SessionTimeout {
+//     constructor() {
+//         this.timeoutMinutes = 5; // 5 minutes for testing
+//         this.warningMinutes = 1; // Show warning 1 minute before logout
+//         this.timeoutMs = this.timeoutMinutes * 60 * 1000;
+//         this.warningMs = this.warningMinutes * 60 * 1000;
+//         this.logoutTimer = null;
+//         this.warningTimer = null;
+//         this.isWarningShown = false;
+//         this.keepAliveInterval = null;
+        
+//         console.log(`Session timeout initialized: ${this.timeoutMinutes} minutes total, ${this.warningMinutes} minute warning`);
+//         this.init();
+//     }
+    
+//     init() {
+//         this.resetTimers();
+//         this.setupActivityListeners();
+//         this.setupAjaxInterceptor();
+//         this.startKeepAlive();
+        
+//         // Log for testing
+//         console.log('Session timers started. Remain inactive to test timeout.');
+//     }
+    
+//     resetTimers() {
+//         // Clear existing timers
+//         if (this.logoutTimer) {
+//             clearTimeout(this.logoutTimer);
+//             console.log('Previous logout timer cleared');
+//         }
+//         if (this.warningTimer) {
+//             clearTimeout(this.warningTimer);
+//             console.log('Previous warning timer cleared');
+//         }
+//         this.isWarningShown = false;
+        
+//         // Set new timers
+//         this.warningTimer = setTimeout(() => {
+//             console.log('Warning timer triggered - showing warning modal');
+//             this.showWarning();
+//         }, this.timeoutMs - this.warningMs);
+        
+//         this.logoutTimer = setTimeout(() => {
+//             console.log('Logout timer triggered - redirecting to login');
+//             this.redirectToLogin();
+//         }, this.timeoutMs);
+        
+//         console.log(`Timers reset: Warning in ${(this.timeoutMs - this.warningMs)/1000}s, Logout in ${this.timeoutMs/1000}s`);
+//     }
+    
+//     setupActivityListeners() {
+//         // Reset timers on user activity
+//         const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart', 'click'];
+//         events.forEach(event => {
+//             document.addEventListener(event, () => {
+//                 console.log(`Activity detected: ${event} - resetting timers`);
+//                 this.resetTimers();
+//             }, { passive: true });
+//         });
+        
+//         // Also reset on form interactions
+//         document.addEventListener('input', () => this.resetTimers());
+//         document.addEventListener('change', () => this.resetTimers());
+//         document.addEventListener('focus', () => this.resetTimers(), true);
+//     }
+    
+//     setupAjaxInterceptor() {
+//         // Intercept AJAX requests to check for session expiration
+//         const originalFetch = window.fetch;
+//         const self = this;
+        
+//         window.fetch = function(...args) {
+//             return originalFetch.apply(this, args).then(response => {
+//                 if (response.status === 401) {
+//                     return response.json().then(data => {
+//                         if (data.session_expired) {
+//                             console.log('Session expired detected in AJAX request - redirecting');
+//                             self.redirectToLogin();
+//                             return Promise.reject(new Error('Session expired'));
+//                         }
+//                         return response;
+//                     });
+//                 }
+//                 return response;
+//             }).catch(error => {
+//                 if (error.message === 'Session expired') {
+//                     throw error;
+//                 }
+//                 return Promise.reject(error);
+//             });
+//         };
+//     }
+    
+//     startKeepAlive() {
+//         // Send keep-alive request every 2 minutes for testing
+//         this.keepAliveInterval = setInterval(() => {
+//             console.log('Sending keep-alive request');
+//             this.sendKeepAlive();
+//         }, 2 * 60 * 1000);
+//     }
+    
+//     sendKeepAlive() {
+//         fetch('?keep_alive=1', {
+//             method: 'GET',
+//             headers: {
+//                 'X-Requested-With': 'XMLHttpRequest'
+//             }
+//         })
+//         .then(response => response.json())
+//         .then(data => {
+//             if (data.success) {
+//                 console.log('Keep-alive successful at:', new Date().toLocaleTimeString());
+//             }
+//         })
+//         .catch(error => {
+//             console.log('Keep-alive request failed:', error);
+//         });
+//     }
+    
+//     showWarning() {
+//         if (this.isWarningShown) return;
+        
+//         this.isWarningShown = true;
+//         console.log('Showing session warning modal');
+//         this.createWarningModal();
+//     }
+    
+//     createWarningModal() {
+//         // Remove any existing modals
+//         const existingModal = document.getElementById('sessionWarningModal');
+//         if (existingModal) existingModal.remove();
+        
+//         // Create warning modal
+//         const modal = document.createElement('div');
+//         modal.id = 'sessionWarningModal';
+//         modal.className = 'session-modal';
+//         modal.innerHTML = `
+//             <div class="session-modal-content">
+//                 <div class="session-modal-header">
+//                     <h3><i class="fas fa-clock"></i> Session Timeout Warning</h3>
+//                 </div>
+//                 <div class="session-modal-body">
+//                     <div class="warning-icon">
+//                         <i class="fas fa-exclamation-triangle"></i>
+//                     </div>
+//                     <p>Your session will expire in <strong>${this.warningMinutes} minute</strong> due to inactivity.</p>
+//                     <p><small>Testing Mode: Session timeout is set to ${this.timeoutMinutes} minutes for testing.</small></p>
+//                     <p>Would you like to continue your session?</p>
+//                 </div>
+//                 <div class="session-modal-actions">
+//                     <button id="continueSession" class="btn-modal btn-primary">
+//                         <i class="fas fa-sync-alt"></i> Continue Session
+//                     </button>
+//                     <button id="logoutNow" class="btn-modal btn-secondary">
+//                         <i class="fas fa-sign-out-alt"></i> Logout Now
+//                     </button>
+//                 </div>
+//             </div>
+//         `;
+        
+//         document.body.appendChild(modal);
+        
+//         // Add event listeners
+//         document.getElementById('continueSession').addEventListener('click', () => {
+//             console.log('User chose to continue session');
+//             this.continueSession();
+//         });
+        
+//         document.getElementById('logoutNow').addEventListener('click', () => {
+//             console.log('User chose to logout immediately');
+//             this.redirectToLogin();
+//         });
+        
+//         // Show modal with animation
+//         setTimeout(() => modal.classList.add('show'), 100);
+        
+//         // Close modal when clicking outside
+//         modal.addEventListener('click', (e) => {
+//             if (e.target === modal) {
+//                 this.continueSession();
+//             }
+//         });
+//     }
+    
+//     redirectToLogin() {
+//         console.log('Redirecting to student_login.php');
+        
+//         // Clear all timers and intervals
+//         if (this.logoutTimer) clearTimeout(this.logoutTimer);
+//         if (this.warningTimer) clearTimeout(this.warningTimer);
+//         if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
+        
+//         // Direct redirect to login page
+//         window.location.href = '../student_login.php?timeout=1';
+//     }
+    
+//     continueSession() {
+//         console.log('Continuing session - resetting timers');
+        
+//         // Hide warning modal
+//         const modal = document.getElementById('sessionWarningModal');
+//         if (modal) {
+//             modal.classList.remove('show');
+//             setTimeout(() => {
+//                 if (modal.parentNode) {
+//                     modal.parentNode.removeChild(modal);
+//                 }
+//             }, 300);
+//         }
+        
+//         // Reset timers
+//         this.resetTimers();
+        
+//         // Send keep-alive request
+//         this.sendKeepAlive();
+//     }
+    
+//     logout() {
+//         console.log('Logging out user');
+//         this.redirectToLogin();
+//     }
+    
+//     // Method to manually trigger warning for testing
+//     testWarning() {
+//         console.log('Manual test: triggering warning');
+//         this.showWarning();
+//     }
+    
+//     // Method to manually trigger expiration for testing
+//     testExpiration() {
+//         console.log('Manual test: triggering expiration and redirect');
+//         this.redirectToLogin();
+//     }
+// }
+
+// // Initialize session timeout when DOM is loaded
+// let sessionTimeout;
+// document.addEventListener('DOMContentLoaded', function() {
+//     sessionTimeout = new SessionTimeout();
+    
+//     // Handle page visibility changes (tab switching)
+//     document.addEventListener('visibilitychange', function() {
+//         if (!document.hidden) {
+//             console.log('Page became visible - resetting timers');
+//             sessionTimeout.resetTimers();
+//         }
+//     });
+    
+//     // Add testing buttons to the page for easy testing
+//     addTestingButtons();
+// });
+
+// function addTestingButtons() {
+//     // Create testing buttons container
+//     const testContainer = document.createElement('div');
+//     testContainer.style.position = 'fixed';
+//     testContainer.style.bottom = '10px';
+//     testContainer.style.right = '10px';
+//     testContainer.style.zIndex = '9999';
+//     testContainer.style.background = 'rgba(0,0,0,0.8)';
+//     testContainer.style.padding = '10px';
+//     testContainer.style.borderRadius = '5px';
+//     testContainer.style.color = 'white';
+//     testContainer.style.fontSize = '12px';
+    
+//     testContainer.innerHTML = `
+//         <div style="margin-bottom: 5px;"><strong>Session Timeout Test</strong></div>
+//         <button onclick="sessionTimeout.testWarning()" style="background: #e53e3e; color: white; border: none; padding: 5px 10px; margin: 2px; border-radius: 3px; cursor: pointer;">Test Warning</button>
+//         <button onclick="sessionTimeout.testExpiration()" style="background: #718096; color: white; border: none; padding: 5px 10px; margin: 2px; border-radius: 3px; cursor: pointer;">Test Redirect</button>
+//         <button onclick="sessionTimeout.resetTimers()" style="background: #38a169; color: white; border: none; padding: 5px 10px; margin: 2px; border-radius: 3px; cursor: pointer;">Reset Timers</button>
+//     `;
+    
+//     document.body.appendChild(testContainer);
+// }
+
+// // Export for potential use in other scripts
+// window.SessionTimeout = SessionTimeout;
+
+// console.log('Session timeout script loaded - 5 minute timeout enabled');

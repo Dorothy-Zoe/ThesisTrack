@@ -1,12 +1,7 @@
 <?php
-session_start();
-require_once '../db/db.php';
-
-// Check if the user is logged in and has the 'coordinator' role
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'coordinator') {
-    header('Location: ../login.php');
-    exit();
-}
+require_once __DIR__ . '/../auth.php';
+requireRole(['coordinator']);
+require_once __DIR__ . '/../db/db.php';
 
 
 // =================V7 UPDATE
@@ -56,12 +51,12 @@ try {
             FROM chapters 
             WHERE status = 'approved'
             GROUP BY group_id
-        ) approved_chapters ON sg.id = approved_chapters.group_id
+        ) approved_chapters ON g.id = approved_chapters.group_id
         LEFT JOIN (
             SELECT group_id, COUNT(*) AS cnt 
             FROM chapters 
             GROUP BY group_id
-        ) total_chapters ON sg.id = total_chapters.group_id
+        ) total_chapters ON g.id = total_chapters.group_id
         GROUP BY sg.id, g.id, a.first_name, a.last_name, approved_chapters.cnt, total_chapters.cnt
         ORDER BY sg.course, sg.section, sg.group_name
     ";
@@ -163,13 +158,12 @@ usort($filtered_groups, function($a, $b) use ($sort_column, $sort_order) {
 // ================== Start of Version 7 update ================== //
 
 // Pagination
-$per_page = 5;
+$entries_per_page = $_GET['entries'] ?? 5;
 $page = $_GET['page'] ?? 1;
 $total_groups = count($filtered_groups);
-$total_pages = ceil($total_groups / $per_page);
-$offset = ($page - 1) * $per_page;
-$paginated_groups = array_slice($filtered_groups, $offset, $per_page);
-
+$total_pages = ceil($total_groups / $entries_per_page);
+$offset = ($page - 1) * $entries_per_page;
+$paginated_groups = array_slice($filtered_groups, $offset, $entries_per_page);
 // Function to generate sort arrows with distinct icons
 function getSortArrows($current_col, $sort_col, $sort_order) {
     if ($current_col == $sort_col) {
@@ -181,10 +175,151 @@ function getSortArrows($current_col, $sort_col, $sort_order) {
     return '<i class="fas fa-sort neutral-arrow" title="Click to sort"></i>';
 }
 
-$entries_per_page = $_GET['entries'] ?? 5;
-$total_pages = ceil(count($filtered_groups) / $entries_per_page);
 
 // ================== End of Version 7 update ================== //
+
+// Notification functions
+function createCoordinatorNotification($pdo, $title, $message, $type = 'info', $group_id = null) {
+    try {
+        $stmt = $pdo->prepare("
+            INSERT INTO notifications (user_id, user_type, title, message, type, is_read, group_id, created_at) 
+            SELECT id, 'coordinator', ?, ?, ?, 0, ?, NOW() 
+            FROM coordinators 
+            WHERE status = 'active'
+        ");
+        $stmt->execute([$title, $message, $type, $group_id]);
+        return true;
+    } catch (PDOException $e) {
+        error_log("Notification error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Specific notification functions for different events
+function notifyCoordinatorChapterUpload($pdo, $group_id, $chapter_number, $chapter_name, $student_name) {
+    $title = "New Chapter Submission";
+    $message = "Group {$group_id} submitted Chapter {$chapter_number}: {$chapter_name} by {$student_name}";
+    return createCoordinatorNotification($pdo, $title, $message, 'info', $group_id);
+}
+
+function notifyCoordinatorChapterReview($pdo, $group_id, $chapter_number, $advisor_name, $status) {
+    $title = "Chapter Review Completed";
+    $message = "Advisor {$advisor_name} {$status} Chapter {$chapter_number} for Group {$group_id}";
+    return createCoordinatorNotification($pdo, $title, $message, 'success', $group_id);
+}
+
+function notifyCoordinatorAdvisorAssignment($pdo, $advisor_name, $section, $course) {
+    $title = "New Advisor Assignment";
+    $message = "{$advisor_name} assigned to {$section} ({$course})";
+    return createCoordinatorNotification($pdo, $title, $message, 'info', null);
+}
+
+function notifyCoordinatorGroupCreation($pdo, $group_name, $section, $advisor_name) {
+    $title = "New Thesis Group";
+    $message = "Group '{$group_name}' created in {$section} under {$advisor_name}";
+    return createCoordinatorNotification($pdo, $title, $message, 'info', null);
+}
+
+// Fetch coordinator-specific notifications
+try {
+    $notification_stmt = $pdo->prepare("
+        SELECT n.*, sg.group_name 
+        FROM notifications n 
+        LEFT JOIN student_groups sg ON n.group_id = sg.id 
+        WHERE n.user_type = 'coordinator' 
+        ORDER BY n.created_at DESC 
+        LIMIT 10
+    ");
+    $notification_stmt->execute();
+    $notifications = $notification_stmt->fetchAll();
+    
+    // Count unread notifications
+    $unread_stmt = $pdo->prepare("
+        SELECT COUNT(*) as unread_count 
+        FROM notifications 
+        WHERE user_type = 'coordinator' AND is_read = 0
+    ");
+    $unread_stmt->execute();
+    $unread_result = $unread_stmt->fetch();
+    $unread_notifications_count = $unread_result['unread_count'] ?? 0;
+    
+} catch (PDOException $e) {
+    error_log("Notification fetch error: " . $e->getMessage());
+    $notifications = [];
+    $unread_notifications_count = 0;
+}
+
+// Handle AJAX requests for notifications
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+    
+    if ($_POST['action'] === 'mark_as_read') {
+        if (isset($_POST['notification_id'])) {
+            // Mark single notification as read
+            $notification_id = $_POST['notification_id'];
+            try {
+                $stmt = $pdo->prepare("
+                    UPDATE notifications 
+                    SET is_read = 1 
+                    WHERE id = ? AND user_type = 'coordinator'
+                ");
+                $stmt->execute([$notification_id]);
+                echo json_encode(['success' => true]);
+            } catch (PDOException $e) {
+                error_log("Mark notification read error: " . $e->getMessage());
+                echo json_encode(['success' => false, 'message' => 'Database error']);
+            }
+        } else {
+            // Mark all as read
+            try {
+                $stmt = $pdo->prepare("
+                    UPDATE notifications 
+                    SET is_read = 1 
+                    WHERE user_type = 'coordinator' AND is_read = 0
+                ");
+                $stmt->execute();
+                echo json_encode(['success' => true]);
+            } catch (PDOException $e) {
+                error_log("Mark all notifications read error: " . $e->getMessage());
+                echo json_encode(['success' => false, 'message' => 'Database error']);
+            }
+        }
+        exit();
+    }
+    
+    if ($_POST['action'] === 'get_notifications') {
+        try {
+            $notification_stmt = $pdo->prepare("
+                SELECT n.*, sg.group_name 
+                FROM notifications n 
+                LEFT JOIN student_groups sg ON n.group_id = sg.id 
+                WHERE n.user_type = 'coordinator' 
+                ORDER BY n.created_at DESC 
+                LIMIT 10
+            ");
+            $notification_stmt->execute();
+            $notifications = $notification_stmt->fetchAll();
+            
+            $unread_stmt = $pdo->prepare("
+                SELECT COUNT(*) as unread_count 
+                FROM notifications 
+                WHERE user_type = 'coordinator' AND is_read = 0
+            ");
+            $unread_stmt->execute();
+            $unread_result = $unread_stmt->fetch();
+            $unread_count = $unread_result['unread_count'] ?? 0;
+            
+            echo json_encode([
+                'success' => true,
+                'notifications' => $notifications,
+                'unread_count' => $unread_count
+            ]);
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false, 'message' => 'Database error']);
+        }
+        exit();
+    }
+}
 
 ?>
 
@@ -196,6 +331,7 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="../images/book-icon.ico">
     <link rel="stylesheet" href="../CSS/coordinator_thesis-groups.css">
+    <link rel="stylesheet" href="../CSS/session_timeout.css">
     <link rel="stylesheet" href="https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css">
     <script src="https://kit.fontawesome.com/4ef2a0fa98.js" crossorigin="anonymous"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
@@ -232,21 +368,45 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
                 <a href="coordinator_advisor-mngt.php" class="nav-item" data-tab="advisors">
                     <i class="fas fa-chalkboard-teacher"></i> Advisor Management
                 </a>
+                <a href="coordinator_thesis-titles-overview.php" class="nav-item">
+                    <i class="fas fa-book"></i> Thesis Titles Overview
+                </a>
+                <a href="coordinator_document-control-panel.php" class="nav-item">
+                    <i class="fas fa-book-open"></i> Document Control Panel
+                </a>
+                 <!-- CHANGE> Added audit logs navigation link -->
+                <a href="coordinator_audit_log.php" class="nav-item" data-tab="audit-logs">
+                    <i class="fas fa-history"></i> Audit Logs
+                </a>
                 <a href="#" id="logoutBtn" class="nav-item logout">
                     <i class="fas fa-sign-out-alt"></i> Logout
                 </a>
-
-                <!-- Logout Confirmation Modal for SIDEBAR -->
-                <div id="logoutModal" class="logout-modal" style="display:none;">
-                    <div class="logout-modal-content">
-                        <h3>Confirm Logout</h3>
-                        <p>Are you sure you want to logout?</p>
-                        <div class="modal-buttons">
-                            <button id="confirmLogout" class="btn btn-danger">Yes, Logout</button>
-                            <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
+                <!-- Enhanced logout confirmation modal -->
+                        <div id="logoutModal" class="modal">
+                            <div class="modal-content modal-centered">
+                                <div class="modal-header">
+                                    <h3 class="modal-title">Confirm Logout</h3>
+                                    <button class="close-modal" onclick="closeLogoutModal()">&times;</button>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="logout-confirmation">
+                                        <div class="logout-icon">
+                                            <i class="fas fa-sign-out-alt"></i>
+                                        </div>
+                                        <p>Are you sure you want to logout from ThesisTrack?</p>
+                                        <p class="logout-note">You will need to login again to access your dashboard.</p>
+                                    </div>
+                                </div>
+                                <div class="modal-actions">
+                                    <button class="btn-modal btn-cancel" id="cancelLogout" onclick="closeLogoutModal()">
+                                        <i class="fas fa-times"></i> Cancel
+                                    </button>
+                                    <button class="btn-modal btn-danger" id="confirmLogout" onclick="confirmLogout()">
+                                        <i class="fas fa-sign-out-alt"></i> Yes, Logout
+                                    </button>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                </div>
             </nav>
         </aside>    <!-- End Sidebar -->
 
@@ -257,9 +417,54 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
             <header class="blank-header">
                 <div class="topbar-left"></div>
                 <div class="topbar-right">
-                    <button class="topbar-icon" title="Notifications">
-                        <i class="fas fa-bell"></i>
-                    </button>
+                    <!-- Notification Dropdown -->
+                    <div class="notification-dropdown">
+                        <button class="topbar-icon" title="Notifications" id="notificationBtn">
+                            <i class="fas fa-bell"></i>
+                            <?php if ($unread_notifications_count > 0): ?>
+                                <span class="notification-badge" id="notificationBadge">
+                                    <?php echo $unread_notifications_count > 9 ? '9+' : $unread_notifications_count; ?>
+                                </span>
+                            <?php endif; ?>
+                        </button>
+                        <div class="notification-menu" id="notificationMenu">
+                            <div class="notification-header">
+                                <h4>Notifications</h4>
+                                <?php if ($unread_notifications_count > 0): ?>
+                                    <button class="mark-all-read" id="markAllRead">Mark all as read</button>
+                                <?php endif; ?>
+                            </div>
+                            <div class="notification-list" id="notificationList">
+                                <?php if (!empty($notifications)): ?>
+                                    <?php foreach ($notifications as $notification): ?>
+                                        <div class="notification-item <?php echo $notification['is_read'] ? '' : 'unread'; ?>" 
+                                             data-id="<?php echo $notification['id']; ?>">
+                                            <span class="notification-type type-<?php echo $notification['type'] ?? 'info'; ?>">
+                                                <?php echo ucfirst($notification['type'] ?? 'info'); ?>
+                                            </span>
+                                            <div class="notification-title">
+                                                <?php echo htmlspecialchars($notification['title']); ?>
+                                            </div>
+                                            <div class="notification-message">
+                                                <?php echo htmlspecialchars($notification['message']); ?>
+                                            </div>
+                                            <div class="notification-time">
+                                                <?php echo date('M d, Y g:i A', strtotime($notification['created_at'])); ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="no-notifications">
+                                        <i class="fas fa-bell-slash"></i>
+                                        <p>No notifications</p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            <a href="#" class="view-all-notifications">
+                                View All Notifications
+                            </a>
+                        </div>
+                    </div>
                     <div class="user-info dropdown">
                         <img src="<?php echo htmlspecialchars($profile_picture); ?>?t=<?php echo time(); ?>" 
                             alt="User Avatar" 
@@ -268,7 +473,7 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
                             tabindex="0"
                             onerror="this.src='../images/default-user.png'" />
                         <div class="dropdown-menu" id="userDropdown">
-                            <a href="#" class="dropdown-item">
+                            <a href="coordinator_settings.php" class="dropdown-item">
                                 <i class="fas fa-cog"></i> Settings
                             </a>
                             <a href="#" id="logoutLink" class="dropdown-item">
@@ -276,17 +481,6 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
                             </a>
                         </div>
                     </div>
-                    <!-- Logout Confirmation Modal for HEADER -->
-                            <div id="LogoutModal" class="modal" style="display:none;">
-                            <div class="logout-modal-content">
-                                <h3>Confirm Logout</h3>
-                                <p>Are you sure you want to logout?</p>
-                                <div class="modal-buttons">
-                                    <button id="headerConfirmLogout" class="btn btn-danger">Yes, Logout</button>
-                                    <button id="headerCancelLogout" class="btn btn-secondary">Cancel</button>
-                                </div>
-                            </div>
-                        </div>
                 </div>
             </header>         <!-- End Header -->
 
@@ -363,7 +557,8 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
                         <div class="table-scroll-wrapper"> <!-- VERSION 7 UPDATE 7/21 -->
 
                         <!-- show entries -->
-                            <div class="table-controls-row">
+                        <div class="table-controls-row">
+                            <form method="GET" action="" class="entries-form">
                                 <div class="entries-selector">
                                     <span>Show</span>
                                     <select name="entries" onchange="this.form.submit()" class="entries-select">
@@ -379,21 +574,29 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
                                     </select>
                                     <span>entries</span>
                                 </div>
+                                
+                                <!-- Preserve other GET parameters -->
+                                <?php foreach ($_GET as $key => $value): ?>
+                                    <?php if ($key !== 'entries' && $key !== 'page'): ?>
+                                        <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
+                                    <?php endif; ?>
+                                <?php endforeach; ?>
+                            </form>
 
-                                <form class="modern-search" method="GET" action="">
-                                    <div class="search-container">
-                                        <i class="fas fa-search"></i>
-                                        <input type="text" name="search" placeholder="Search here..." class="search-input" 
-                                            value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
-                                        <!-- Preserve other GET parameters -->
-                                        <?php foreach ($_GET as $key => $value): ?>
-                                            <?php if ($key !== 'search' && $key !== 'page'): ?>
-                                                <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
-                                            <?php endif; ?>
-                                        <?php endforeach; ?>
-                                    </div>
-                                </form>
-                            </div>
+                            <form class="modern-search" method="GET" action="">
+                                <div class="search-container">
+                                    <i class="fas fa-search"></i>
+                                    <input type="text" name="search" placeholder="Search here..." class="search-input" 
+                                        value="<?= htmlspecialchars($_GET['search'] ?? '', ENT_QUOTES) ?>">
+                                    <!-- Preserve other GET parameters including entries -->
+                                    <?php foreach ($_GET as $key => $value): ?>
+                                        <?php if ($key !== 'search' && $key !== 'page'): ?>
+                                            <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>">
+                                        <?php endif; ?>
+                                    <?php endforeach; ?>
+                                </div>
+                            </form>
+                        </div>
     
                     <table id="groupsTable" class="groups-table">
                         <thead>
@@ -430,19 +633,21 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
                                         Status <?= getSortArrows('group_status', $sort_column, $sort_order) ?>
                                     </a>
                                 </th>
-                                <th>Actions</th>
+                                <!-- <th>Actions</th> -->
                             </tr>
                         </thead>
                     <tbody>
                 <?php foreach ($paginated_groups as $group): 
-                                        // Calculate progress percentage
-                                        $progress = $group['total_chapters'] > 0 
-                                            ? round(($group['approved_chapters'] / $group['total_chapters']) * 100) 
-                                            : 0;
-                                        
-                                        // Get course abbreviation for badge class
-                                        $course_abbr = strtoupper(substr($group['course'], 0, 4));
-                                        $group_status = strtolower($group['group_status']);
+                                                                // Calculate progress percentage (defensive)
+                                                                $approved = isset($group['approved_chapters']) ? intval($group['approved_chapters']) : 0;
+                                                                $totalCh = isset($group['total_chapters']) ? intval($group['total_chapters']) : 0;
+                                                                // Use a 5-chapter display model: each approved chapter = 20%
+                                                                $displayChapterCount = 5;
+                                                                $progress = min(100, $approved * (100 / $displayChapterCount));
+
+                                                                // Get course abbreviation for badge class
+                                                                $course_abbr = strtoupper(substr($group['course'], 0, 4));
+                                                                $group_status = strtolower($group['group_status']);
                                     ?>
                                     <tr data-program="<?php echo htmlspecialchars($group['course']); ?>" 
                                         data-section="<?php echo htmlspecialchars($group['section']); ?>"
@@ -517,12 +722,18 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
                                                 </div>
                                             </div>
                                             <div class="chapter-progress-cell">
-                                                <?php for ($i = 1; $i <= 5; $i++): ?>
+                                                <?php for ($i = 1; $i <= $displayChapterCount; $i++): ?>
                                                     <?php 
-                                                        $status = '';
-                                                        if ($i <= $group['approved_chapters']) {
+                                                        // Use computed, safe values
+                                                        if (!isset($approved)) $approved = isset($group['approved_chapters']) ? intval($group['approved_chapters']) : 0;
+                                                        if (!isset($displayChapterCount)) $displayChapterCount = 5;
+
+                                                        $status = 'pending';
+
+                                                        if ($i <= $approved) {
                                                             $status = 'completed';
-                                                        } elseif ($i == $group['approved_chapters'] + 1 && $group['approved_chapters'] < $group['total_chapters']) {
+                                                        } elseif ($i === $approved + 1 && $approved < $displayChapterCount) {
+                                                            // Show in-progress only for the next chapter within the 5-chapter model
                                                             $status = 'in-progress';
                                                         } else {
                                                             $status = 'pending';
@@ -539,13 +750,13 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
                                                 <?php echo ucfirst($group_status); ?>
                                             </span>
                                         </td>
-                                        <td>
+                                        <!-- <td>
                                             <button class="btn-secondary btn-small view-group-btn" 
                                                     data-group-id="<?php echo $group['student_group_id']; ?>"
                                                     onclick="viewGroupDetails(<?php echo $group['student_group_id']; ?>)">
                                                 View
                                             </button>
-                                        </td>
+                                        </td> -->
                                     </tr>
                                     <?php endforeach; ?>
                                 </tbody>
@@ -553,20 +764,20 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
 
                              <!-- V7 Update: Pagination (7/21) -->
                             <div class="pagination">
-                                <?php if ($page > 1): ?>
-                                    <a href="?page=<?= $page-1 ?>&sort=<?= $sort_column ?>&order=<?= $sort_order ?>&search=<?= urlencode($search_term) ?>">&laquo; Previous</a>
-                                <?php endif; ?>
-                                
-                                <?php for ($i = 1; $i <= $total_pages; $i++): ?>
-                                    <a href="?page=<?= $i ?>&sort=<?= $sort_column ?>&order=<?= $sort_order ?>&search=<?= urlencode($search_term) ?>" <?= $i == $page ? 'class="active"' : '' ?>>
-                                        <?= $i ?>
-                                    </a>
-                                <?php endfor; ?>
-                                
-                                <?php if ($page < $total_pages): ?>
-                                    <a href="?page=<?= $page+1 ?>&sort=<?= $sort_column ?>&order=<?= $sort_order ?>&search=<?= urlencode($search_term) ?>">Next &raquo;</a>
-                                <?php endif; ?>
-                            </div>
+                            <?php if ($page > 1): ?>
+                                <a href="?page=<?= $page-1 ?>&sort=<?= $sort_column ?>&order=<?= $sort_order ?>&search=<?= urlencode($search_term) ?>&entries=<?= $entries_per_page ?>">&laquo; Previous</a>
+                            <?php endif; ?>
+                            
+                            <?php for ($i = 1; $i <= $total_pages; $i++): ?>
+                                <a href="?page=<?= $i ?>&sort=<?= $sort_column ?>&order=<?= $sort_order ?>&search=<?= urlencode($search_term) ?>&entries=<?= $entries_per_page ?>" <?= $i == $page ? 'class="active"' : '' ?>>
+                                    <?= $i ?>
+                                </a>
+                            <?php endfor; ?>
+                            
+                            <?php if ($page < $total_pages): ?>
+                                <a href="?page=<?= $page+1 ?>&sort=<?= $sort_column ?>&order=<?= $sort_order ?>&search=<?= urlencode($search_term) ?>&entries=<?= $entries_per_page ?>">Next &raquo;</a>
+                            <?php endif; ?>
+                        </div>
 
                             </div>
                           </div>
@@ -581,4 +792,5 @@ $total_pages = ceil(count($filtered_groups) / $entries_per_page);
 
     <script src="../JS/coordinator_thesis-groups.js"></script>
 </body>
+    <script src="../JS/session_timeout.js"></script>
 </html>

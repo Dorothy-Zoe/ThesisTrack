@@ -61,6 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="images/book-icon.ico">
     <link rel="stylesheet" href="CSS/login.css">
+    <link rel="stylesheet" href="CSS/session_timeout.css">
     <title>Change Password - ThesisTrack</title>
 </head>
 <body>

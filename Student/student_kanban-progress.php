@@ -1,15 +1,11 @@
 <?php
-session_start();
-require_once '../db/db.php'; // Assuming this file exists and handles database connection
+require_once __DIR__ . '/../auth.php';
+requireRole(['student']);
+require_once __DIR__ . '/../db/db.php'; // Assuming this file exists and handles database connection
 
-// Check if user is logged in and is a student
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'student') {
-    header('Location: ../student_login.php');
-    exit();
-}
 $user_id = $_SESSION['user_id'];
-$user_name = $_SESSION['name'];
-$user_section = $_SESSION['section'];
+$user_name = $_SESSION['name'] ?? '';
+$user_section = $_SESSION['section'] ?? null;
 
 
 // In your dashboard PHP code where you fetch the profile picture:
@@ -71,27 +67,31 @@ if ($userGroup && isset($pdo)) {
 // Get chapters for the group
 $chapters = [];
 if ($userGroup && isset($pdo)) {
+    // START of Version 9 changes
+    // version 9 : Updated query to only fetch current chapter versions for kanban display
     $chaptersQuery = $pdo->prepare("
-        SELECT * FROM chapters
-        WHERE group_id = ?
+        SELECT *, 
+               (SELECT COUNT(*) FROM chapters c2 WHERE c2.group_id = chapters.group_id AND c2.chapter_number = chapters.chapter_number) as total_versions
+        FROM chapters
+        WHERE group_id = ? AND is_current = 1
         ORDER BY chapter_number
     ");
+    // END of Version 9 changes
     $chaptersQuery->execute([$userGroup['id']]);
     $chapters = $chaptersQuery->fetchAll(PDO::FETCH_ASSOC);
 }
 
-// Get notifications
-$notifications = [];
-if (isset($pdo)) {
-    $notificationsQuery = $pdo->prepare("
-        SELECT * FROM notifications
-        WHERE user_id = ?
-        ORDER BY created_at DESC
-        LIMIT 5
-    ");
-    $notificationsQuery->execute([$user_id]);
-    $notifications = $notificationsQuery->fetchAll(PDO::FETCH_ASSOC);
-}
+// START of Version 9 changes
+// version 9 : Added missing chapter names array for kanban board display
+$chapterNames = [
+    1 => 'Introduction',
+    2 => 'Review of Related Literature', 
+    3 => 'Methodology',
+    4 => 'Results and Discussion',
+    5 => 'Summary, Conclusion, and Recommendation'
+];
+// END of Version 9 changes
+
 
 // Calculate progress
 $totalChapters = 5;
@@ -103,6 +103,101 @@ foreach ($chapters as $chapter) {
 }
 $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapters) * 100 : 0;
 
+// Fetch notifications
+$notifications = [];
+$unread_notifications_count = 0;
+
+try {
+    // Get notifications
+    $notificationsQuery = $pdo->prepare("
+        SELECT * FROM notifications 
+        WHERE user_id = ? 
+        ORDER BY created_at DESC 
+        LIMIT 5
+    ");
+    $notificationsQuery->execute([$user_id]);
+    $notifications = $notificationsQuery->fetchAll(PDO::FETCH_ASSOC);
+
+    // Count unread notifications
+    $unreadQuery = $pdo->prepare("
+        SELECT COUNT(*) as unread_count 
+        FROM notifications 
+        WHERE user_id = ? AND is_read = 0
+    ");
+    $unreadQuery->execute([$user_id]);
+    $unread_result = $unreadQuery->fetch(PDO::FETCH_ASSOC);
+    $unread_notifications_count = $unread_result['unread_count'] ?? 0;
+
+} catch (PDOException $e) {
+    error_log("Database error fetching notifications: " . $e->getMessage());
+}
+
+// Handle AJAX requests for notifications
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+    
+    try {
+        switch ($_POST['action']) {
+            case 'mark_as_read':
+                if (isset($_POST['notification_id'])) {
+                    // Mark single notification as read
+                    $markReadStmt = $pdo->prepare("
+                        UPDATE notifications 
+                        SET is_read = 1 
+                        WHERE id = ? AND user_id = ?
+                    ");
+                    $markReadStmt->execute([$_POST['notification_id'], $user_id]);
+                    echo json_encode(['success' => true]);
+                }
+                break;
+
+            case 'mark_all_read':
+                // Mark all notifications as read for this user
+                $markAllReadStmt = $pdo->prepare("
+                    UPDATE notifications 
+                    SET is_read = 1 
+                    WHERE user_id = ? AND is_read = 0
+                ");
+                $markAllReadStmt->execute([$user_id]);
+                echo json_encode(['success' => true, 'message' => 'All notifications marked as read']);
+                break;
+
+            case 'get_notifications':
+                // Return updated notifications
+                $notificationsQuery = $pdo->prepare("
+                    SELECT * FROM notifications 
+                    WHERE user_id = ? 
+                    ORDER BY created_at DESC 
+                    LIMIT 5
+                ");
+                $notificationsQuery->execute([$user_id]);
+                $updated_notifications = $notificationsQuery->fetchAll(PDO::FETCH_ASSOC);
+                
+                $unreadQuery = $pdo->prepare("
+                    SELECT COUNT(*) as unread_count 
+                    FROM notifications 
+                    WHERE user_id = ? AND is_read = 0
+                ");
+                $unreadQuery->execute([$user_id]);
+                $unread_result = $unreadQuery->fetch(PDO::FETCH_ASSOC);
+                $updated_unread_count = $unread_result['unread_count'] ?? 0;
+                
+                echo json_encode([
+                    'success' => true,
+                    'notifications' => $updated_notifications,
+                    'unread_count' => $updated_unread_count
+                ]);
+                break;
+
+            default:
+                echo json_encode(['success' => false, 'message' => 'Invalid action']);
+        }
+    } catch (PDOException $e) {
+        error_log("Notification action error: " . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+    exit;
+}
 ?>
 
 <!DOCTYPE html>
@@ -147,18 +242,35 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
            <a href="#" id="logoutBtn" class="nav-item logout">
                 <i class="fas fa-sign-out-alt"></i> Logout
            </a>
-
-            <!-- Logout Confirmation Modal for SIDEBAR -->
-            <div id="logoutModal" class="modal">
-            <div class="modal-content">
-                <h3>Confirm Logout</h3>
-                <p>Are you sure you want to logout?</p>
-                <div class="modal-buttons">
-                <button id="confirmLogout" class="btn btn-danger">Yes, Logout</button>
-                <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
+        </nav>
+        
+        <!-- Enhanced logout confirmation modal -->
+        <div id="logoutModal" class="modal">
+            <div class="modal-content modal-centered">
+                <div class="modal-header">
+                    <h3 class="modal-title">Confirm Logout</h3>
+                    <button class="close-modal" onclick="closeLogoutModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="logout-confirmation">
+                        <div class="logout-icon">
+                            <i class="fas fa-sign-out-alt"></i>
+                        </div>
+                        <p>Are you sure you want to logout from ThesisTrack?</p>
+                        <p class="logout-note">You will need to login again to access your dashboard.</p>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-modal btn-cancel" id="cancelLogout" onclick="closeLogoutModal()">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>
+                    <button class="btn-modal btn-danger" id="confirmLogout" onclick="confirmLogout()">
+                        <i class="fas fa-sign-out-alt"></i> Yes, Logout
+                    </button>
                 </div>
             </div>
-            </div>
+        </div>
+        <!-- end of change for version 10 -->
 
         </aside>
            <!-- End Sidebar -->
@@ -169,8 +281,54 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
              <div class="topbar-left">
     </div>
                 <div class="topbar-right">
-                <button class="topbar-icon" title="Notifications">
-                <i class="fas fa-bell"></i></button>
+<!-- Notification Dropdown -->
+                    <div class="notification-dropdown">
+                        <button class="topbar-icon" title="Notifications" id="notificationBtn">
+                            <i class="fas fa-bell"></i>
+                            <?php if ($unread_notifications_count > 0): ?>
+                                <span class="notification-badge" id="notificationBadge">
+                                    <?php echo $unread_notifications_count > 9 ? '9+' : $unread_notifications_count; ?>
+                                </span>
+                            <?php endif; ?>
+                        </button>
+                        <div class="notification-menu" id="notificationMenu">
+                            <div class="notification-header">
+                                <h4>Notifications</h4>
+                                <?php if ($unread_notifications_count > 0): ?>
+                                    <button class="mark-all-read" id="markAllRead">Mark all as read</button>
+                                <?php endif; ?>
+                            </div>
+                            <div class="notification-list" id="notificationList">
+                                <?php if (!empty($notifications)): ?>
+                                    <?php foreach ($notifications as $notification): ?>
+                                        <div class="notification-item <?php echo $notification['is_read'] ? '' : 'unread'; ?>" 
+                                             data-id="<?php echo $notification['id']; ?>">
+                                            <span class="notification-type type-<?php echo $notification['type'] ?? 'info'; ?>">
+                                                <?php echo ucfirst($notification['type'] ?? 'info'); ?>
+                                            </span>
+                                            <div class="notification-title">
+                                                <?php echo htmlspecialchars($notification['title']); ?>
+                                            </div>
+                                            <div class="notification-message">
+                                                <?php echo htmlspecialchars($notification['message']); ?>
+                                            </div>
+                                            <div class="notification-time">
+                                                <?php echo date('M d, Y g:i A', strtotime($notification['created_at'])); ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="no-notifications">
+                                        <i class="fas fa-bell-slash"></i>
+                                        <p>No notifications</p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            <a href="#" class="view-all-notifications">
+                                View All Notifications
+                            </a>
+                        </div>
+                    </div>
                 <div class="user-info dropdown">
                 <img src="<?php echo htmlspecialchars($profile_picture); ?>"
      alt="User Avatar"
@@ -178,26 +336,16 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
      id="userAvatar"
      tabindex="0" />
         <div class="dropdown-menu" id="userDropdown">
-          <a href="#" class="dropdown-item">
+          <!-- start of Version 10 changes -->
+          <!-- changed code start, purpose: update settings link to point to student_settings.php -->
+          <a href="student_settings.php" class="dropdown-item">
             <i class="fas fa-cog"></i> Settings
           </a>
+          <!-- changed code end, Version 10 -->
+          <!-- end of Version 10 changes -->
          <a href="#" class="dropdown-item" id="logoutLink">
             <i class="fas fa-sign-out-alt"></i> Logout
          </a>
-
-        <!-- Logout Confirmation Modal for HEADER-->
-        <div id="logoutModal" class="modal" style="display:none;">
-        <div class="modal-content">
-            <h3>Confirm Logout</h3>
-            <p>Are you sure you want to logout?</p>
-            <div class="modal-buttons">
-            <button id="confirmLogout" class="btn btn-danger">Yes, Logout</button>
-            <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
-            </div>
-        </div>
-        </div>
-
-
         </div>
       </div>
     </div>
@@ -216,6 +364,7 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
              <!-- Kanban - Progress Tab -->
             <div id="kanban" class="tab-content">
                 <div class="card">
+                    <button class="togglebtn" onclick="toggleSidebar()">☰</button>
                     <h3 style="color: #1a202c; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
                         Chapter Progress Board</h3>
                     <div class="kanban-board">
@@ -246,10 +395,23 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
                                         'priority_class' => 'low',
                                     ]);
                                     break;
+                                case 'pending': // version 9 : Added pending status handling
                                 case 'in_progress':
                                     $kanbanColumns['in_progress']['chapters'][] = array_merge($cardData, [
                                         'description' => 'Currently being drafted or revised.',
                                         'meta' => 'Last updated: ' . date('M j', strtotime($chapter['updated_at'] ?? $chapter['created_at'])),
+                                        'priority_class' => 'medium',
+                                    ]);
+                                    break;
+                                case 'uploaded': // version 9 : Fixed uploaded status handling with proper enum value
+                                case 'under_review': // version 9 : Added under_review status handling
+                                    $versionText = isset($chapter['total_versions']) && $chapter['total_versions'] > 1 
+                                        ? " (v{$chapter['version']}, {$chapter['total_versions']} uploads)" 
+                                        : " (v{$chapter['version']})";
+                                    $kanbanColumns['under_review']['chapters'][] = array_merge($cardData, [
+                                        'title' => $cardData['title'] . $versionText, // version 9 : Added version info to title
+                                        'description' => 'Chapter uploaded and awaiting advisor review.',
+                                        'meta' => 'Uploaded: ' . date('M j, Y g:i A', strtotime($chapter['upload_date'] ?? $chapter['created_at'])), // version 9 : Enhanced timestamp format
                                         'priority_class' => 'medium',
                                     ]);
                                     break;
@@ -325,6 +487,9 @@ $progressPercentage = ($totalChapters > 0) ? ($completedChapters / $totalChapter
     </div>
 
 
-  <script src="../JS/student_kanban-progress.js"></script>
+    <script src="../JS/student_kanban-progress.js"></script>
+    <link rel="stylesheet" href="../CSS/session_timeout.css">
+    <script src="../JS/session_timeout.js"></script>
+  
 </body>
 </html>

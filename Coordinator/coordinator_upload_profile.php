@@ -1,13 +1,12 @@
 <?php
 ob_start();
-session_start();
-require_once '../db/db.php';
+require_once __DIR__ . '/../auth.php';
+requireRole(['coordinator']);
+require_once __DIR__ . '/../db/db.php';
 header('Content-Type: application/json');
 
 try {
-    if (!isset($_SESSION['user_id'])) {
-        throw new Exception('Not authorized', 401);
-    }
+    // Coordinator authenticated via requireRole
 
     if (!isset($_FILES['profile_picture']) || $_FILES['profile_picture']['error'] !== UPLOAD_ERR_OK) {
         throw new Exception('No file uploaded or upload error', 400);

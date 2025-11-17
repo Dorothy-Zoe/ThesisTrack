@@ -1,10 +1,57 @@
 <?php
-session_start();
-require_once '../db/db.php'; // Make sure this returns a consistent connection ($pdo or $conn)
+require_once __DIR__ . '/../auth.php';
+requireRole(['advisor']);
 
-// Check if the user is logged in and has the 'advisor' role
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'advisor') {
-    header('Location: advisor_login.php'); 
+// Handle notification actions (mark as read, mark all read)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['notification_action'])) {
+    header('Content-Type: application/json');
+    
+    try {
+        $action = $_POST['notification_action'];
+        
+        if ($action === 'mark_as_read' && isset($_POST['notification_id'])) {
+            $notification_id = (int)$_POST['notification_id'];
+            
+            $stmt = $pdo->prepare("
+                UPDATE notifications 
+                SET is_read = 1 
+                WHERE id = ? AND user_id = ? AND user_type = 'advisor'
+            ");
+            $stmt->execute([$notification_id, $_SESSION['user_id']]);
+            
+            echo json_encode(['success' => true]);
+            
+        } elseif ($action === 'mark_all_read') {
+            $stmt = $pdo->prepare("
+                UPDATE notifications 
+                SET is_read = 1 
+                WHERE user_id = ? AND user_type = 'advisor' AND is_read = 0
+            ");
+            $stmt->execute([$_SESSION['user_id']]);
+            
+            echo json_encode(['success' => true]);
+            
+        } elseif ($action === 'get_notifications') {
+            $stmt = $pdo->prepare("
+                SELECT * FROM notifications 
+                WHERE user_id = ? AND user_type = 'advisor' 
+                ORDER BY created_at DESC 
+                LIMIT 10
+            ");
+            $stmt->execute([$_SESSION['user_id']]);
+            $notifications = $stmt->fetchAll();
+            
+            echo json_encode([
+                'success' => true,
+                'notifications' => $notifications
+            ]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Invalid action']);
+        }
+    } catch (PDOException $e) {
+        error_log("Notifications error: " . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'Database error']);
+    }
     exit();
 }
 
@@ -36,12 +83,31 @@ try {
         }
     }
 
+    // Fetch unread notifications count and recent notifications
+    $notification_stmt = $pdo->prepare("
+        SELECT * FROM notifications 
+        WHERE user_id = ? AND user_type = 'advisor' 
+        ORDER BY created_at DESC 
+        LIMIT 10
+    ");
+    $notification_stmt->execute([$advisor_id]);
+    $notifications = $notification_stmt->fetchAll();
+    
+    // Count unread notifications
+    $unread_count_stmt = $pdo->prepare("
+        SELECT COUNT(*) as count FROM notifications 
+        WHERE user_id = ? AND user_type = 'advisor' AND is_read = 0
+    ");
+    $unread_count_stmt->execute([$advisor_id]);
+    $unread_notifications_count = $unread_count_stmt->fetch()['count'];
 
     // Fetch feedback history for this advisor
     $sql = "
         SELECT 
             cc.id AS comment_id,
             c.id AS chapter_id,
+            c.version,
+            c.review_score,
             c.chapter_number,
             c.chapter_name,
             c.status,
@@ -86,6 +152,7 @@ try {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="../images/book-icon.ico">
     <link rel="stylesheet" href="../CSS/advisor_feedback.css">
+    <link rel="stylesheet" href="../CSS/session_timeout.css">
     <script src="https://kit.fontawesome.com/4ef2a0fa98.js" crossorigin="anonymous"></script>
     <title>ThesisTrack</title>
     
@@ -116,7 +183,7 @@ try {
                     <i class="fas fa-users-rectangle"></i> Groups Management
                 </a>
                 <a href="advisor_reviews.php" class="nav-item" data-tab="reviews">
-                    <i class="fas fa-tasks"></i> Pending Reviews
+                    <i class="fas fa-tasks"></i> Feedback Management
                 </a>
                 <a href="advisor_feedback.php" class="nav-item active" data-tab="feedback">
                     <i class="fas fa-comments"></i> Feedback History
@@ -125,17 +192,33 @@ try {
                     <i class="fas fa-sign-out-alt"></i> Logout
                 </a>
 
-                <!-- Logout Confirmation Modal for SIDEBAR-->
-                <div id="logoutModal" class="logout-modal" style="display:none;">
-                    <div class="logout-modal-content">
-                        <h3>Confirm Logout</h3>
-                        <p>Are you sure you want to logout?</p>
-                        <div class="modal-buttons">
-                            <button id="confirmLogout" class="btn btn-danger">Yes, Logout</button>
-                            <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
+                <!-- Enhanced logout confirmation modal -->
+                <div id="logoutModal" class="modal">
+                    <div class="modal-content modal-centered">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Confirm Logout</h3>
+                            <button class="close-modal" onclick="closeLogoutModal()">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="logout-confirmation">
+                                <div class="logout-icon">
+                                    <i class="fas fa-sign-out-alt"></i>
+                                </div>
+                                <p>Are you sure you want to logout from ThesisTrack?</p>
+                                <p class="logout-note">You will need to login again to access your dashboard.</p>
+                            </div>
+                        </div>
+                        <div class="modal-actions">
+                            <button class="btn-modal btn-cancel" id="cancelLogout" onclick="closeLogoutModal()">
+                                <i class="fas fa-times"></i> Cancel
+                            </button>
+                            <button class="btn-modal btn-danger" id="confirmLogout" onclick="confirmLogout()">
+                                <i class="fas fa-sign-out-alt"></i> Yes, Logout
+                            </button>
                         </div>
                     </div>
                 </div>
+                
             </nav>
 
         </aside>
@@ -148,29 +231,64 @@ try {
              <div class="topbar-left">
     </div>
                 <div class="topbar-right">
-                <button class="topbar-icon" title="Notifications">
-                <i class="fas fa-bell"></i></button>
+<!-- Notification Dropdown -->
+                    <div class="notification-dropdown">
+                        <button class="topbar-icon" title="Notifications" id="notificationBtn">
+                            <i class="fas fa-bell"></i>
+                            <?php if ($unread_notifications_count > 0): ?>
+                                <span class="notification-badge" id="notificationBadge">
+                                    <?php echo $unread_notifications_count > 9 ? '9+' : $unread_notifications_count; ?>
+                                </span>
+                            <?php endif; ?>
+                        </button>
+                        <div class="notification-menu" id="notificationMenu">
+                            <div class="notification-header">
+                                <h4>Notifications</h4>
+                                <?php if ($unread_notifications_count > 0): ?>
+                                    <button class="mark-all-read" id="markAllRead">Mark all as read</button>
+                                <?php endif; ?>
+                            </div>
+                            <div class="notification-list" id="notificationList">
+                                <?php if (!empty($notifications)): ?>
+                                    <?php foreach ($notifications as $notification): ?>
+                                        <div class="notification-item <?php echo $notification['is_read'] ? '' : 'unread'; ?>" 
+                                             data-id="<?php echo $notification['id']; ?>">
+                                            <span class="notification-type type-<?php echo $notification['type'] ?? 'info'; ?>">
+                                                <?php echo ucfirst($notification['type'] ?? 'info'); ?>
+                                            </span>
+                                            <div class="notification-title">
+                                                <?php echo htmlspecialchars($notification['title']); ?>
+                                            </div>
+                                            <div class="notification-message">
+                                                <?php echo htmlspecialchars($notification['message']); ?>
+                                            </div>
+                                            <div class="notification-time">
+                                                <?php echo date('M d, Y g:i A', strtotime($notification['created_at'])); ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="no-notifications">
+                                        <i class="fas fa-bell-slash"></i>
+                                        <p>No notifications</p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            <a href="#" class="view-all-notifications">
+                                View All Notifications
+                            </a>
+                        </div>
+                    </div>
                 <div class="user-info dropdown">
                 <img src="<?php echo htmlspecialchars($profile_picture); ?>" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0" />
         <div class="dropdown-menu" id="userDropdown">
-          <a href="#" class="dropdown-item">
+          <a href="advisor_settings.php" class="dropdown-item">
             <i class="fas fa-cog"></i> Settings
           </a>
           <a href="#" id="logoutLink" class="dropdown-item">
             <i class="fas fa-sign-out-alt"></i> Logout
           </a>
-           <!-- Logout Confirmation Modal for HEADER -->
-        <div id="logoutModal" class="modal" style="display:none;">
-        <div class="modal-content logout-modal-content"> <!-- for logout -->
-
-            <h3>Confirm Logout</h3>
-            <p>Are you sure you want to logout?</p>
-            <div class="modal-buttons">
-            <button id="confirmLogout" class="btn btn-danger">Yes, Logout</button>
-            <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
-            </div>
-        </div>
-        </div>
+           
         
         </div>
       </div>
@@ -183,6 +301,7 @@ try {
                       <!-- Page Title -->
                 <div class="page-title-section">
                     <h1><i class="fas fa-comments"></i> Feedback History</h1>
+                     <button class="togglebtn" onclick="toggleSidebar()">☰</button>
                     <p>Review all feedback provided to your thesis groups.</p>
                 </div>
 
@@ -190,6 +309,7 @@ try {
               <div id="feedback" class="tab-content">
                     <div class="card">
                         <h3>Thesis Group Feedback Review</h3>
+                        
                         
                         <?php if (isset($error_message)): ?>
                             <div class="alert alert-error"><?php echo htmlspecialchars($error_message); ?></div>
@@ -214,6 +334,12 @@ try {
                                                 <p style="color: #4a5568; font-size: 0.9rem;">
                                                     Submitted by: <?php echo htmlspecialchars($feedback['first_name'] . ' ' . $feedback['last_name']); ?>
                                                 </p>
+                                                <div style="font-size: 0.85rem; color: #718096; margin-top:6px;">
+                                                    Version: <?php echo htmlspecialchars($feedback['version'] ?? '1'); ?>
+                                                    <?php if (!is_null($feedback['review_score']) && $feedback['review_score'] !== ''): ?>
+                                                        &nbsp;•&nbsp; Score: <?php echo htmlspecialchars($feedback['review_score']); ?>
+                                                    <?php endif; ?>
+                                                </div>
                                             </div>
                                             <div style="text-align: right;">
                                                 <div style="background: <?php 
@@ -233,6 +359,8 @@ try {
                                             </p>
                                         </div>
                                         <button class="btn-secondary btn-small" 
+                                            id="editBtn-<?php echo $feedback['comment_id']; ?>"
+                                            data-comment="<?php echo htmlspecialchars($feedback['comment'], ENT_QUOTES); ?>"
                                             onclick="editFeedback(<?php echo $feedback['comment_id']; ?>)">
                                             Edit Feedback
                                         </button>
@@ -275,4 +403,5 @@ try {
      <script src="../JS/advisor_feedback.js"></script>
 
 </body>
+    <script src="../JS/session_timeout.js"></script>
 </html>

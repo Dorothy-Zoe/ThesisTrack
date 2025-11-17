@@ -7,7 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initNavigation();
     
     // Show welcome message
-    showMessage("Welcome to your dashboard!", "info");
+    // showMessage("Welcome to your dashboard!", "info");
     
     // Initialize UI components
     initUI();
@@ -73,28 +73,67 @@ function initUI() {
     }
     
     // Logout functionality
+  const logoutBtn = document.getElementById("logoutBtn")
+  const logoutLink = document.getElementById("logoutLink")
+  const logoutModal = document.getElementById("logoutModal")
+
+  if (logoutModal) {
+    const showModal = (e) => {
+      if (e) e.preventDefault()
+      logoutModal.classList.add("show")
+    }
+
+    const hideModal = () => {
+      logoutModal.classList.remove("show")
+    }
+
+    if (logoutBtn) logoutBtn.addEventListener("click", showModal)
+    if (logoutLink) logoutLink.addEventListener("click", showModal)
+
+    // Close modal when clicking outside
+    logoutModal.addEventListener("click", (e) => {
+      if (e.target === logoutModal) {
+        hideModal()
+      }
+    })
+
+    // Make closeLogoutModal and confirmLogout globally available
+    window.closeLogoutModal = hideModal
+    window.confirmLogout = () => {
+      window.location.href = "../logout.php"
+    }
+  }
+};
+
+
+// Initialize logout functionality
+function initLogout() {
     const logoutBtn = document.getElementById('logoutBtn');
     const logoutLink = document.getElementById('logoutLink'); 
     const logoutModal = document.getElementById('logoutModal');
     const confirmLogout = document.getElementById('confirmLogout');
     const cancelLogout = document.getElementById('cancelLogout');
-    
-    if (logoutModal) {
-        const showModal = (e) => {
-            if (e) e.preventDefault();
-            logoutModal.style.display = 'flex';
-        };
-        
-        const hideModal = () => logoutModal.style.display = 'none';
-        
-        if (logoutBtn) logoutBtn.addEventListener('click', showModal);
-        if (logoutLink) logoutLink.addEventListener('click', showModal);
-        if (cancelLogout) cancelLogout.addEventListener('click', hideModal);
-        if (confirmLogout) confirmLogout.addEventListener('click', () => {
-            window.location.href = '../logout.php';
-        });
-    }
+
+    if (!logoutBtn || !logoutModal) return;
+
+    const showLogoutModal = (e) => {
+        if (e) e.preventDefault();
+        logoutModal.style.display = 'flex';
+    };
+
+    const hideLogoutModal = () => {
+        logoutModal.style.display = 'none';
+    };
+
+    if (logoutBtn) logoutBtn.addEventListener('click', showLogoutModal);
+    if (logoutLink) logoutLink.addEventListener('click', showLogoutModal);
+    if (cancelLogout) cancelLogout.addEventListener('click', hideLogoutModal);
+    if (confirmLogout) confirmLogout.addEventListener('click', () => {
+        window.location.href = '../logout.php';
+    });
 }
+
+
 
 function showMessage(text, type = "info") {
     const existingMessages = document.querySelectorAll(".message");
@@ -291,3 +330,163 @@ window.addEventListener("resize", () => {
 
 
         // ==================== END OF V7 UPDATE ====================
+
+// =============== Start of version 11 update =============== 
+
+
+        // Notification functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const notificationBtn = document.getElementById('notificationBtn');
+            const notificationMenu = document.getElementById('notificationMenu');
+            const markAllReadBtn = document.getElementById('markAllRead');
+            const notificationList = document.getElementById('notificationList');
+            const notificationBadge = document.getElementById('notificationBadge');
+
+            // Toggle notification dropdown
+            if (notificationBtn && notificationMenu) {
+                notificationBtn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    notificationMenu.classList.toggle('show');
+                });
+
+                // Close dropdown when clicking outside
+                document.addEventListener('click', function() {
+                    notificationMenu.classList.remove('show');
+                });
+
+                // Prevent dropdown from closing when clicking inside
+                notificationMenu.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                });
+            }
+
+            // Mark all as read
+            if (markAllReadBtn) {
+                markAllReadBtn.addEventListener('click', function() {
+                    markAllNotificationsAsRead();
+                });
+            }
+
+            // Mark individual notification as read
+            if (notificationList) {
+                notificationList.addEventListener('click', function(e) {
+                    const notificationItem = e.target.closest('.notification-item');
+                    if (notificationItem && notificationItem.classList.contains('unread')) {
+                        const notificationId = notificationItem.getAttribute('data-id');
+                        markNotificationAsRead(notificationId, notificationItem);
+                    }
+                });
+            }
+
+            // Auto-refresh notifications every 30 seconds
+            setInterval(refreshNotifications, 30000);
+        });
+
+        function markNotificationAsRead(notificationId, element) {
+            fetch('advisor_dashboard.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'action=mark_as_read&notification_id=' + notificationId
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    element.classList.remove('unread');
+                    updateNotificationBadge();
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+        function markAllNotificationsAsRead() {
+            fetch('advisor_dashboard.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'action=mark_as_read'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Remove unread class from all notifications
+                    document.querySelectorAll('.notification-item.unread').forEach(item => {
+                        item.classList.remove('unread');
+                    });
+                    updateNotificationBadge();
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+        function refreshNotifications() {
+            fetch('advisor_dashboard.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'action=get_notifications'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateNotificationDisplay(data.notifications, data.unread_count);
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+        function updateNotificationDisplay(notifications, unreadCount) {
+            // Update notification badge
+            const badge = document.getElementById('notificationBadge');
+            if (unreadCount > 0) {
+                if (!badge) {
+                    const notificationBtn = document.getElementById('notificationBtn');
+                    const newBadge = document.createElement('span');
+                    newBadge.className = 'notification-badge';
+                    newBadge.id = 'notificationBadge';
+                    newBadge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+                    notificationBtn.appendChild(newBadge);
+                } else {
+                    badge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+                }
+            } else if (badge) {
+                badge.remove();
+            }
+
+            // Update notification list (you can implement this if needed)
+            // This would require more complex DOM manipulation
+        }
+
+        function updateNotificationBadge() {
+            // Count remaining unread notifications
+            const unreadCount = document.querySelectorAll('.notification-item.unread').length;
+            const badge = document.getElementById('notificationBadge');
+            
+            if (unreadCount > 0) {
+                if (!badge) {
+                    const notificationBtn = document.getElementById('notificationBtn');
+                    const newBadge = document.createElement('span');
+                    newBadge.className = 'notification-badge';
+                    newBadge.id = 'notificationBadge';
+                    newBadge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+                    notificationBtn.appendChild(newBadge);
+                } else {
+                    badge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+                }
+            } else if (badge) {
+                badge.remove();
+                
+                // Remove mark all read button if no unread notifications
+                const markAllReadBtn = document.getElementById('markAllRead');
+                if (markAllReadBtn) {
+                    markAllReadBtn.remove();
+                }
+            }
+        }
+
+
+       
+// ===============  End of version 11 update =============== 

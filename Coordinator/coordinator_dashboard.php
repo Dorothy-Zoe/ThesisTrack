@@ -1,14 +1,9 @@
 <?php
-session_start();
-require_once '../db/db.php';
+require_once __DIR__ . '/../auth.php';
+requireRole(['coordinator']);
+require_once __DIR__ . '/../db/db.php';
 
-// Check coordinator session
-if (!isset($_SESSION['user_id'])) {
-    header('Location: ../login.php');
-    exit();
-}
-
-// In your coordinator session verification code:
+// Coordinator session verification
 try {
     $stmt = $pdo->prepare("SELECT id, CONCAT(first_name, ' ', last_name) AS name, profile_picture FROM coordinators WHERE id = ? AND status = 'active'");
     $stmt->execute([$_SESSION['user_id']]);
@@ -117,21 +112,21 @@ try {
     $stmt = $pdo->query("SELECT COUNT(*) AS pending_reviews FROM chapters WHERE status IN ('pending', 'under_review')");
     $pending_reviews = $stmt->fetch()['pending_reviews'] ?? 0;
 
-    // Program statistics - now using student_groups as the source of truth
+    // Program statistics - get all sections from advisor_sections
     $stmt = $pdo->query("
-    SELECT 
-        sg.course,
-        COUNT(DISTINCT sg.id) AS group_count,
-        COUNT(DISTINCT sg.advisor_id) AS advisor_count,
-        COUNT(DISTINCT gm.student_id) AS student_count,
-        GROUP_CONCAT(DISTINCT sg.section ORDER BY sg.section SEPARATOR ', ') AS sections
-    FROM student_groups sg
-    LEFT JOIN groups g ON g.id = sg.group_id
-    LEFT JOIN group_members gm ON gm.group_id = g.id
-    WHERE sg.status = 'active'
-    GROUP BY sg.course
-");
-
+        SELECT 
+            asec.course,
+            COUNT(DISTINCT asec.advisor_id) AS advisor_count,
+            COUNT(DISTINCT asec.section) AS section_count,
+            GROUP_CONCAT(DISTINCT asec.section ORDER BY asec.section SEPARATOR ', ') AS sections,
+            COUNT(DISTINCT sg.id) AS group_count,
+            COUNT(DISTINCT gm.student_id) AS student_count
+        FROM advisor_sections asec
+        LEFT JOIN advisors a ON asec.advisor_id = a.id AND a.status = 'active'
+        LEFT JOIN student_groups sg ON asec.course = sg.course AND asec.section = sg.section AND sg.status = 'active'
+        LEFT JOIN group_members gm ON sg.group_id = gm.group_id
+        GROUP BY asec.course
+    ");
     
     while ($row = $stmt->fetch()) {
         $program_stats[$row['course']] = $row;
@@ -237,7 +232,148 @@ function getProfilePicture($user_id) {
     return '../images/default-user.png';
 }
 
+// Notification functions
+function createCoordinatorNotification($pdo, $title, $message, $type = 'info', $group_id = null) {
+    try {
+        $stmt = $pdo->prepare("
+            INSERT INTO notifications (user_id, user_type, title, message, type, is_read, group_id, created_at) 
+            SELECT id, 'coordinator', ?, ?, ?, 0, ?, NOW() 
+            FROM coordinators 
+            WHERE status = 'active'
+        ");
+        $stmt->execute([$title, $message, $type, $group_id]);
+        return true;
+    } catch (PDOException $e) {
+        error_log("Notification error: " . $e->getMessage());
+        return false;
+    }
+}
 
+// Specific notification functions for different events
+function notifyCoordinatorChapterUpload($pdo, $group_id, $chapter_number, $chapter_name, $student_name) {
+    $title = "New Chapter Submission";
+    $message = "Group {$group_id} submitted Chapter {$chapter_number}: {$chapter_name} by {$student_name}";
+    return createCoordinatorNotification($pdo, $title, $message, 'info', $group_id);
+}
+
+function notifyCoordinatorChapterReview($pdo, $group_id, $chapter_number, $advisor_name, $status) {
+    $title = "Chapter Review Completed";
+    $message = "Advisor {$advisor_name} {$status} Chapter {$chapter_number} for Group {$group_id}";
+    return createCoordinatorNotification($pdo, $title, $message, 'success', $group_id);
+}
+
+function notifyCoordinatorAdvisorAssignment($pdo, $advisor_name, $section, $course) {
+    $title = "New Advisor Assignment";
+    $message = "{$advisor_name} assigned to {$section} ({$course})";
+    return createCoordinatorNotification($pdo, $title, $message, 'info', null);
+}
+
+function notifyCoordinatorGroupCreation($pdo, $group_name, $section, $advisor_name) {
+    $title = "New Thesis Group";
+    $message = "Group '{$group_name}' created in {$section} under {$advisor_name}";
+    return createCoordinatorNotification($pdo, $title, $message, 'info', null);
+}
+
+// Fetch coordinator-specific notifications
+try {
+    $notification_stmt = $pdo->prepare("
+        SELECT n.*, sg.group_name 
+        FROM notifications n 
+        LEFT JOIN student_groups sg ON n.group_id = sg.id 
+        WHERE n.user_type = 'coordinator' 
+        ORDER BY n.created_at DESC 
+        LIMIT 10
+    ");
+    $notification_stmt->execute();
+    $notifications = $notification_stmt->fetchAll();
+    
+    // Count unread notifications
+    $unread_stmt = $pdo->prepare("
+        SELECT COUNT(*) as unread_count 
+        FROM notifications 
+        WHERE user_type = 'coordinator' AND is_read = 0
+    ");
+    $unread_stmt->execute();
+    $unread_result = $unread_stmt->fetch();
+    $unread_notifications_count = $unread_result['unread_count'] ?? 0;
+    
+} catch (PDOException $e) {
+    error_log("Notification fetch error: " . $e->getMessage());
+    $notifications = [];
+    $unread_notifications_count = 0;
+}
+
+// Handle AJAX requests for notifications
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+    
+    if ($_POST['action'] === 'mark_as_read') {
+        if (isset($_POST['notification_id'])) {
+            // Mark single notification as read
+            $notification_id = $_POST['notification_id'];
+            try {
+                $stmt = $pdo->prepare("
+                    UPDATE notifications 
+                    SET is_read = 1 
+                    WHERE id = ? AND user_type = 'coordinator'
+                ");
+                $stmt->execute([$notification_id]);
+                echo json_encode(['success' => true]);
+            } catch (PDOException $e) {
+                error_log("Mark notification read error: " . $e->getMessage());
+                echo json_encode(['success' => false, 'message' => 'Database error']);
+            }
+        } else {
+            // Mark all as read
+            try {
+                $stmt = $pdo->prepare("
+                    UPDATE notifications 
+                    SET is_read = 1 
+                    WHERE user_type = 'coordinator' AND is_read = 0
+                ");
+                $stmt->execute();
+                echo json_encode(['success' => true]);
+            } catch (PDOException $e) {
+                error_log("Mark all notifications read error: " . $e->getMessage());
+                echo json_encode(['success' => false, 'message' => 'Database error']);
+            }
+        }
+        exit();
+    }
+    
+    if ($_POST['action'] === 'get_notifications') {
+        try {
+            $notification_stmt = $pdo->prepare("
+                SELECT n.*, sg.group_name 
+                FROM notifications n 
+                LEFT JOIN student_groups sg ON n.group_id = sg.id 
+                WHERE n.user_type = 'coordinator' 
+                ORDER BY n.created_at DESC 
+                LIMIT 10
+            ");
+            $notification_stmt->execute();
+            $notifications = $notification_stmt->fetchAll();
+            
+            $unread_stmt = $pdo->prepare("
+                SELECT COUNT(*) as unread_count 
+                FROM notifications 
+                WHERE user_type = 'coordinator' AND is_read = 0
+            ");
+            $unread_stmt->execute();
+            $unread_result = $unread_stmt->fetch();
+            $unread_count = $unread_result['unread_count'] ?? 0;
+            
+            echo json_encode([
+                'success' => true,
+                'notifications' => $notifications,
+                'unread_count' => $unread_count
+            ]);
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false, 'message' => 'Database error']);
+        }
+        exit();
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -280,21 +416,46 @@ function getProfilePicture($user_id) {
                 <a href="coordinator_advisor-mngt.php" class="nav-item">
                     <i class="fas fa-chalkboard-teacher"></i> Advisor Management
                 </a>
+                <a href="coordinator_thesis-titles-overview.php" class="nav-item">
+                    <i class="fas fa-book"></i> Thesis Titles Overview
+                </a>
+                <a href="coordinator_document-control-panel.php" class="nav-item">
+                    <i class="fas fa-book-open"></i> Document Control Panel
+                </a>
+                 <!-- CHANGE> Added audit logs navigation link -->
+                <a href="coordinator_audit_log.php" class="nav-item" data-tab="audit-logs">
+                    <i class="fas fa-history"></i> Audit Logs
+                </a>
                 <a href="#" id="logoutBtn" class="nav-item logout">
                     <i class="fas fa-sign-out-alt"></i> Logout
                 </a>
 
-                <!-- Logout Confirmation Modal for SIDEBAR -->
-                <div id="logoutModal" class="logout-modal" style="display:none;">
-                    <div class="logout-modal-content">
-                        <h3>Confirm Logout</h3>
-                        <p>Are you sure you want to logout?</p>
-                        <div class="modal-buttons">
-                            <button id="confirmLogout" class="btn btn-danger">Yes, Logout</button>
-                            <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
+                <!-- Enhanced logout confirmation modal -->
+                        <div id="logoutModal" class="modal">
+                            <div class="modal-content modal-centered">
+                                <div class="modal-header">
+                                    <h3 class="modal-title">Confirm Logout</h3>
+                                    <button class="close-modal" onclick="closeLogoutModal()">&times;</button>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="logout-confirmation">
+                                        <div class="logout-icon">
+                                            <i class="fas fa-sign-out-alt"></i>
+                                        </div>
+                                        <p>Are you sure you want to logout from ThesisTrack?</p>
+                                        <p class="logout-note">You will need to login again to access your dashboard.</p>
+                                    </div>
+                                </div>
+                                <div class="modal-actions">
+                                    <button class="btn-modal btn-cancel" id="cancelLogout" onclick="closeLogoutModal()">
+                                        <i class="fas fa-times"></i> Cancel
+                                    </button>
+                                    <button class="btn-modal btn-danger" id="confirmLogout" onclick="confirmLogout()">
+                                        <i class="fas fa-sign-out-alt"></i> Yes, Logout
+                                    </button>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                </div>
             </nav>
         </aside>
         <!-- End Sidebar -->
@@ -305,9 +466,59 @@ function getProfilePicture($user_id) {
                 <div class="topbar-left">
                 </div>
                 <div class="topbar-right">
-                    <button class="topbar-icon" title="Notifications">
-                        <i class="fas fa-bell"></i>
-                    </button>
+                <!-- Notification Dropdown -->
+                    <div class="notification-dropdown">
+                        <button class="topbar-icon" title="Notifications" id="notificationBtn">
+                            <i class="fas fa-bell"></i>
+                            <?php if ($unread_notifications_count > 0): ?>
+                                <span class="notification-badge" id="notificationBadge">
+                                    <?php echo $unread_notifications_count > 9 ? '9+' : $unread_notifications_count; ?>
+                                </span>
+                            <?php endif; ?>
+                        </button>
+                        <div class="notification-menu" id="notificationMenu">
+                            <div class="notification-header">
+                                <h4>System Monitoring</h4>
+                                <?php if ($unread_notifications_count > 0): ?>
+                                    <button class="mark-all-read" id="markAllRead">Mark all as read</button>
+                                <?php endif; ?>
+                            </div>
+                            <div class="notification-list" id="notificationList">
+                                <?php if (!empty($notifications)): ?>
+                                    <?php foreach ($notifications as $notification): ?>
+                                        <div class="notification-item <?php echo $notification['is_read'] ? '' : 'unread'; ?>" 
+                                             data-id="<?php echo $notification['id']; ?>">
+                                            <span class="notification-type type-<?php echo $notification['type'] ?? 'info'; ?>">
+                                                <?php echo ucfirst($notification['type'] ?? 'info'); ?>
+                                            </span>
+                                            <?php if ($notification['group_name']): ?>
+                                                <div class="notification-group">
+                                                    Group: <?php echo htmlspecialchars($notification['group_name']); ?>
+                                                </div>
+                                            <?php endif; ?>
+                                            <div class="notification-title">
+                                                <?php echo htmlspecialchars($notification['title']); ?>
+                                            </div>
+                                            <div class="notification-message">
+                                                <?php echo htmlspecialchars($notification['message']); ?>
+                                            </div>
+                                            <div class="notification-time">
+                                                <?php echo date('M d, Y g:i A', strtotime($notification['created_at'])); ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="no-notifications">
+                                        <i class="fas fa-bell-slash"></i>
+                                        <p>No system notifications</p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            <a href="coordinator_notifications.php" class="view-all-notifications">
+                                View All System Activities
+                            </a>
+                        </div>
+                    </div>
                     <div class="user-info dropdown">
                         <img src="<?php echo getProfilePicture($_SESSION['user_id']); ?>?t=<?php echo time(); ?>" 
                         alt="User Avatar" 
@@ -315,7 +526,7 @@ function getProfilePicture($user_id) {
                         id="userAvatar" 
                         tabindex="0" />
                         <div class="dropdown-menu" id="userDropdown">
-                            <a href="#" class="dropdown-item">
+                            <a href="coordinator_settings.php" class="dropdown-item">
                                 <i class="fas fa-cog"></i> Settings
                             </a>
                             <a href="#" id="logoutLink" class="dropdown-item">
@@ -340,61 +551,71 @@ function getProfilePicture($user_id) {
                 </header>
 
                 <!-- Overview Tab -->
-                <div id="overview" class="tab-content active">
-                    <div class="overview-stats">
-                        <div class="stat-card">
-                            <div class="stat-number"><?php echo htmlspecialchars($total_sections); ?></div>
-                            <div class="stat-label">CICT Sections</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number"><?php echo htmlspecialchars($total_advisors); ?></div>
-                            <div class="stat-label">Active Advisors</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number"><?php echo htmlspecialchars($total_groups); ?></div>
-                            <div class="stat-label">Thesis Groups</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number"><?php echo htmlspecialchars($total_students); ?></div>
-                            <div class="stat-label">CICT Students</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number"><?php echo htmlspecialchars($chapters_completed); ?></div>
-                            <div class="stat-label">Chapters Completed</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number"><?php echo htmlspecialchars($pending_reviews); ?></div>
-                            <div class="stat-label">Pending Reviews</div>
-                        </div>
-                    </div>
+                 <div class="overview-stats">
+                <a href="coordinator_sec-advisors.php" class="stat-card">
+                    <div class="stat-number"><?php echo htmlspecialchars($total_sections); ?></div>
+                    <div class="stat-label">CICT Sections</div>
+                </a>
+
+                <a href="coordinator_advisor-mngt.php" class="stat-card">
+                    <div class="stat-number"><?php echo htmlspecialchars($total_advisors); ?></div>
+                    <div class="stat-label">Active Advisors</div>
+                </a>
+
+                <a href="coordinator_thesis-groups.php" class="stat-card">
+                    <div class="stat-number"><?php echo htmlspecialchars($total_groups); ?></div>
+                    <div class="stat-label">Thesis Groups</div>
+                </a>
+
+                <a href="coordinator_sec-advisors.php" class="stat-card">
+                    <div class="stat-number"><?php echo htmlspecialchars($total_students); ?></div>
+                    <div class="stat-label">CICT Students</div>
+                </a>
+
+                <a href="#" class="stat-card">
+                    <div class="stat-number"><?php echo htmlspecialchars($chapters_completed); ?></div>
+                    <div class="stat-label">Chapters Completed</div>
+                </a>
+
+                <!-- <a href="#" class="stat-card">
+                    <div class="stat-number"><?php echo htmlspecialchars($pending_reviews); ?></div>
+                    <div class="stat-label">Pending Reviews</div>
+                </a> -->
+            </div>
+                
 
                     <div class="card">
-                        <h3>CICT Program Group Summary</h3>
-                        <?php if (!empty($program_stats)): ?>
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-top: 1.5rem;">
-                                <?php foreach ($program_stats as $course => $stats): ?>
-                                    <div class="cict-section">
-                                        <h4><?php echo htmlspecialchars($course); ?></h4>
-                                        <div class="course-badge <?php echo htmlspecialchars(strtolower(str_replace(' ', '-', $course))); ?>">
-                                            <?php echo htmlspecialchars($course); ?> Program
-                                        </div>
-                                        <p style="font-size: 1.5rem; font-weight: bold; color: #805ad5; margin: 0.5rem 0;">
-                                            <?php echo htmlspecialchars($stats['group_count']); ?> Groups
-                                        </p>
-                                        <p style="color: #4a5568; font-size: 0.9rem;">
-                                            <?php echo htmlspecialchars($stats['advisor_count']); ?> Advisors • 
-                                            <?php echo htmlspecialchars($stats['student_count']); ?> Students
-                                        </p>
-                                        <p style="color: #4a5568; font-size: 0.9rem; margin-top: 0.5rem;">
-                                            Sections: <?php echo htmlspecialchars($stats['sections']); ?>
-                                        </p>
+                    <h3>CICT Program Section Summary</h3>
+                    <?php if (!empty($program_stats)): ?>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-top: 1.5rem;">
+                            <?php foreach ($program_stats as $course => $stats): ?>
+                                <div class="cict-section">
+                                    <h4><?php echo htmlspecialchars($course); ?></h4>
+                                    <div class="course-badge <?php echo htmlspecialchars(strtolower(str_replace(' ', '-', $course))); ?>">
+                                        <?php echo htmlspecialchars($course); ?> Program
                                     </div>
-                                <?php endforeach; ?>
-                            </div>
-                        <?php else: ?>
-                            <p>No program data available.</p>
-                        <?php endif; ?>
-                    </div>
+                                    <p style="font-size: 1.5rem; font-weight: bold; color: #805ad5; margin: 0.5rem 0;">
+                                        <?php echo htmlspecialchars($stats['section_count'] ?? $stats['group_count']); ?> Sections
+                                    </p>
+                                    <p style="color: #4a5568; font-size: 0.9rem;">
+                                        <?php echo htmlspecialchars($stats['advisor_count']); ?> Advisors • 
+                                        <?php echo htmlspecialchars($stats['student_count'] ?? '0'); ?> Students
+                                    </p>
+                                    <p style="color: #4a5568; font-size: 0.9rem; margin-top: 0.5rem;">
+                                        Sections: <?php echo htmlspecialchars($stats['sections']); ?>
+                                    </p>
+                                    <?php if (isset($stats['group_count'])): ?>
+                                    <p style="color: #4a5568; font-size: 0.9rem;">
+                                        <?php echo htmlspecialchars($stats['group_count']); ?> Active Groups
+                                    </p>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php else: ?>
+                        <p>No program data available.</p>
+                    <?php endif; ?>
+                </div>
 
                     <div class="card">
                         <h3>Recent CICT System Activity</h3>
@@ -461,6 +682,8 @@ function getProfilePicture($user_id) {
 </div>
    
     <script src="../JS/coordinator_dashboard.js"></script>
+    <link rel="stylesheet" href="../CSS/session_timeout.css">
+    <script src="../JS/session_timeout.js"></script>
     
 </body>
 </html>

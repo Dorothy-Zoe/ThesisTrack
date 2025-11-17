@@ -1,18 +1,40 @@
 <?php
-session_start();
-require_once '../db/db.php';
-
-// Check if the user is logged in and has the 'advisor' role
-if (!isset($_SESSION['user_id'])) {
-    header('Location: advisor_login.php'); 
-    exit();
-}
+require_once __DIR__ . '/../auth.php';
+requireRole(['advisor']);
 
 // Get the logged-in advisor's ID
 $advisor_id = $_SESSION['user_id'];
 $user_name = $_SESSION['name'] ?? 'Advisor';
 
 $profile_picture = '../images/default-user.png'; // Default image
+
+// Handle notification actions only
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+    
+    try {
+        if ($_POST['action'] === 'mark_notification_read') {
+            $notification_id = $_POST['notification_id'] ?? null;
+            
+            if ($notification_id) {
+                // Mark single notification as read
+                $stmt = $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ? AND user_type = 'advisor'");
+                $stmt->execute([$notification_id, $advisor_id]);
+                echo json_encode(['success' => true]);
+            }
+            
+        } elseif ($_POST['action'] === 'mark_all_notifications_read') {
+            // Mark all notifications as read
+            $stmt = $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND user_type = 'advisor'");
+            $stmt->execute([$advisor_id]);
+            echo json_encode(['success' => true]);
+        }
+    } catch (Exception $e) {
+        error_log("Action error: " . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'An error occurred.']);
+    }
+    exit();
+}
 
 try {
     // Get advisor details including profile picture
@@ -34,12 +56,32 @@ try {
         }
     }
 
+    // Get notifications for advisor
+    $notifications_stmt = $pdo->prepare("
+        SELECT * FROM notifications 
+        WHERE user_id = ? AND user_type = 'advisor' 
+        ORDER BY created_at DESC 
+        LIMIT 10
+    ");
+    $notifications_stmt->execute([$advisor_id]);
+    $notifications = $notifications_stmt->fetchAll();
+
+    // Count unread notifications
+    $unread_stmt = $pdo->prepare("
+        SELECT COUNT(*) as unread_count FROM notifications 
+        WHERE user_id = ? AND user_type = 'advisor' AND is_read = 0
+    ");
+    $unread_stmt->execute([$advisor_id]);
+    $unread_result = $unread_stmt->fetch();
+    $unread_notifications_count = $unread_result['unread_count'];
 
 } catch (PDOException $e) {
     // Log the error and use default values
     error_log("Database error fetching advisor details: " . $e->getMessage());
     $user_name = 'Advisor';
     $profile_picture = '../images/default-user.png';
+    $notifications = [];
+    $unread_notifications_count = 0;
 }
 
 try {
@@ -81,20 +123,34 @@ try {
             $members[] = $member;
         }
         
-        // Get chapters for this group
-        $chapters_query = "SELECT id, chapter_number, chapter_name, status, 
-                        (SELECT COUNT(*) FROM chapter_comments 
-                            WHERE chapter_id = chapters.id AND is_resolved = 0) as unresolved_comments
-                        FROM chapters 
-                        WHERE group_id = ?
-                        ORDER BY chapter_number";
+        // Get LATEST VERSION of chapters for this group - only show latest version per chapter
+        // Also check if feedback exists for each chapter
+        $chapters_query = "SELECT c1.*, 
+                          (SELECT COUNT(*) FROM chapter_comments 
+                           WHERE chapter_id = c1.id AND is_resolved = 0) as unresolved_comments,
+                          (SELECT COUNT(*) FROM chapter_comments 
+                           WHERE chapter_id = c1.id AND commenter_type = 'advisor') as has_feedback
+                        FROM chapters c1
+                        WHERE c1.group_id = ?
+                        AND c1.version = (
+                            SELECT MAX(c2.version) 
+                            FROM chapters c2 
+                            WHERE c2.group_id = c1.group_id 
+                            AND c2.chapter_number = c1.chapter_number
+                        )
+                        ORDER BY c1.chapter_number";
         $stmt_c = $conn->prepare($chapters_query);
         $stmt_c->bind_param("i", $group_id);
         $stmt_c->execute();
         $chapters_result = $stmt_c->get_result();
         
         $chapters = [];
+        $pending_review_count = 0;
         while ($chapter = $chapters_result->fetch_assoc()) {
+            // Count chapters that need review (under_review or needs_revision)
+            if ($chapter['status'] == 'under_review' || $chapter['status'] == 'needs_revision') {
+                $pending_review_count++;
+            }
             $chapters[] = $chapter;
         }
         
@@ -102,7 +158,8 @@ try {
         $groups_data[] = [
             'group_info' => $group,
             'members' => $members,
-            'chapters' => $chapters
+            'chapters' => $chapters,
+            'pending_review_count' => $pending_review_count
         ];
     }
 } catch (Exception $e) {
@@ -119,9 +176,9 @@ try {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="../images/book-icon.ico">
     <link rel="stylesheet" href="../CSS/advisor_group.css">
+    <link rel="stylesheet" href="../CSS/session_timeout.css">
     <script src="https://kit.fontawesome.com/4ef2a0fa98.js" crossorigin="anonymous"></script>
     <title>ThesisTrack</title>
-
 </head>
 <body>
     <div class="app-container">
@@ -148,7 +205,7 @@ try {
                     <i class="fas fa-users-rectangle"></i> Groups Management
                 </a>
                 <a href="advisor_reviews.php" class="nav-item" data-tab="reviews">
-                    <i class="fas fa-tasks"></i> Pending Reviews
+                    <i class="fas fa-tasks"></i> Feedback Management
                 </a>
                 <a href="advisor_feedback.php" class="nav-item" data-tab="feedback">
                     <i class="fas fa-comments"></i> Feedback History
@@ -157,14 +214,29 @@ try {
                     <i class="fas fa-sign-out-alt"></i> Logout
                 </a>
 
-                <!-- Logout Confirmation Modal for SIDEBAR-->
-                <div id="logoutModal" class="logout-modal" style="display:none;">
-                    <div class="logout-modal-content">
-                        <h3>Confirm Logout</h3>
-                        <p>Are you sure you want to logout?</p>
-                        <div class="modal-buttons">
-                            <button id="confirmLogout" class="btn btn-danger">Yes, Logout</button>
-                            <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
+                <!-- Enhanced logout confirmation modal -->
+                <div id="logoutModal" class="modal">
+                    <div class="modal-content modal-centered">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Confirm Logout</h3>
+                            <button class="close-modal" onclick="closeLogoutModal()">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="logout-confirmation">
+                                <div class="logout-icon">
+                                    <i class="fas fa-sign-out-alt"></i>
+                                </div>
+                                <p>Are you sure you want to logout from ThesisTrack?</p>
+                                <p class="logout-note">You will need to login again to access your dashboard.</p>
+                            </div>
+                        </div>
+                        <div class="modal-actions">
+                            <button class="btn-modal btn-cancel" id="cancelLogout" onclick="closeLogoutModal()">
+                                <i class="fas fa-times"></i> Cancel
+                            </button>
+                            <button class="btn-modal btn-danger" id="confirmLogout" onclick="confirmLogout()">
+                                <i class="fas fa-sign-out-alt"></i> Yes, Logout
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -177,29 +249,64 @@ try {
             <header class="blank-header">
                 <div class="topbar-left"></div>
                 <div class="topbar-right">
-                    <button class="topbar-icon" title="Notifications">
-                        <i class="fas fa-bell"></i>
-                    </button>
+                    <!-- Notification Dropdown -->
+                    <div class="notification-dropdown">
+                        <button class="topbar-icon" title="Notifications" id="notificationBtn">
+                            <i class="fas fa-bell"></i>
+                            <?php if ($unread_notifications_count > 0): ?>
+                                <span class="notification-badge" id="notificationBadge">
+                                    <?php echo $unread_notifications_count > 9 ? '9+' : $unread_notifications_count; ?>
+                                </span>
+                            <?php endif; ?>
+                        </button>
+                        <div class="notification-menu" id="notificationMenu">
+                            <div class="notification-header">
+                                <h4>Notifications</h4>
+                                <?php if ($unread_notifications_count > 0): ?>
+                                    <button class="mark-all-read" id="markAllRead">Mark all as read</button>
+                                <?php endif; ?>
+                            </div>
+                            <div class="notification-list" id="notificationList">
+                                <?php if (!empty($notifications)): ?>
+                                    <?php foreach ($notifications as $notification): ?>
+                                        <div class="notification-item <?php echo $notification['is_read'] ? '' : 'unread'; ?>" 
+                                             data-id="<?php echo $notification['id']; ?>">
+                                            <span class="notification-type type-<?php echo $notification['type'] ?? 'info'; ?>">
+                                                <?php echo ucfirst($notification['type'] ?? 'info'); ?>
+                                            </span>
+                                            <div class="notification-title">
+                                                <?php echo htmlspecialchars($notification['title']); ?>
+                                            </div>
+                                            <div class="notification-message">
+                                                <?php echo htmlspecialchars($notification['message']); ?>
+                                            </div>
+                                            <div class="notification-time">
+                                                <?php echo date('M d, Y g:i A', strtotime($notification['created_at'])); ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="no-notifications">
+                                        <i class="fas fa-bell-slash"></i>
+                                        <p>No notifications</p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            <a href="advisor_notifications.php" class="view-all-notifications">
+                                View All Notifications
+                            </a>
+                        </div>
+                    </div>
+
                     <div class="user-info dropdown">
                         <img src="<?php echo htmlspecialchars($profile_picture); ?>" alt="User Avatar" class="user-avatar" id="userAvatar" tabindex="0" />
                         <div class="dropdown-menu" id="userDropdown">
-                            <a href="#" class="dropdown-item">
+                            <a href="advisor_settings.php" class="dropdown-item">
                                 <i class="fas fa-cog"></i> Settings
                             </a>
                             <a href="#" id="logoutLink" class="dropdown-item">
                                 <i class="fas fa-sign-out-alt"></i> Logout
                             </a>
-                            <!-- Logout Confirmation Modal for HEADER -->
-                            <div id="logoutModal" class="modal" style="display:none;">
-                                <div class="modal-content logout-modal-content">
-                                    <h3>Confirm Logout</h3>
-                                    <p>Are you sure you want to logout?</p>
-                                    <div class="modal-buttons">
-                                        <button id="confirmLogout" class="btn btn-danger">Yes, Logout</button>
-                                        <button id="cancelLogout" class="btn btn-secondary">Cancel</button>
-                                    </div>
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -232,6 +339,7 @@ try {
                                     $group_info = $group['group_info'];
                                     $members = $group['members'];
                                     $chapters = $group['chapters'];
+                                    $pending_review_count = $group['pending_review_count'];
                                     
                                     // Determine course badge color
                                     $badge_class = ($group_info['course'] == 'BSCS') ? 'course-badge' : 'course-badge is-badge';
@@ -262,7 +370,6 @@ try {
                                                 <?php 
                                                     $chapter_status = 'pending';
                                                     $chapter_title = 'Chapter ' . $i . ': Not Started';
-                                                    $chapter_score = '';
                                                     
                                                     foreach ($chapters as $chapter) {
                                                         if ($chapter['chapter_number'] == $i) {
@@ -283,6 +390,8 @@ try {
                                     <div class="group-actions">
                                         <button class="btn-expand" onclick="toggleGroupDetails('group<?php echo $group_info['id']; ?>')">View Details</button>
                                         <?php 
+                                            /*
+                                            // Pending review button logic commented out per request
                                             // Find the first chapter that needs review
                                             $chapter_to_review = null;
                                             foreach ($chapters as $chapter) {
@@ -294,113 +403,56 @@ try {
                                             
                                             if ($chapter_to_review): 
                                         ?>
-                                            <button class="btn-primary btn-small" 
-                                                    onclick="reviewChapter('group<?php echo $group_info['id']; ?>', 'chapter<?php echo $chapter_to_review['chapter_number']; ?>')">
-                                                Review Ch.<?php echo $chapter_to_review['chapter_number']; ?>
-                                            </button>
+                                            <!-- Pending review button intentionally disabled -->
                                         <?php else: ?>
-                                            <button class="btn-secondary btn-small">No Pending Reviews</button>
+                                            <!-- Pending reviews link intentionally disabled -->
                                         <?php endif; ?>
+                                        */
+                                        ?>
                                     </div>
 
                                     <div class="group-details" id="group<?php echo $group_info['id']; ?>-details">
-                                        <?php foreach ($chapters as $chapter): ?>
-                                        <div class="chapter-detail">
-                                            <div class="chapter-detail-header">
-                                                <span class="chapter-name">Chapter <?php echo $chapter['chapter_number']; ?>: <?php echo htmlspecialchars($chapter['chapter_name']); ?></span>
-                                                <span class="chapter-score 
-                                                    <?php 
-                                                        if ($chapter['status'] == 'approved') echo 'completed';
-                                                        elseif ($chapter['status'] == 'needs_revision') echo 'needs-revision';
-                                                        else echo 'in-progress';
-                                                    ?>">
-                                                    <?php 
-                                                        echo ucfirst(str_replace('_', ' ', $chapter['status']));
-                                                        if ($chapter['unresolved_comments'] > 0) {
-                                                            echo ' (' . $chapter['unresolved_comments'] . ' comments)';
-                                                        }
-                                                    ?>
-                                                </span>
+                                        <?php if (empty($chapters)): ?>
+                                            <div class="no-chapters-message">
+                                                <i class="fas fa-file-alt"></i>
+                                                <p>No chapters uploaded yet.</p>
                                             </div>
-                                            <?php 
-                                                // Get the latest comment for this chapter
-                                                $comment_query = "SELECT cc.comment, cc.created_at, 
-                                                                 CASE 
-                                                                     WHEN cc.commenter_type = 'advisor' THEN CONCAT(a.first_name, ' ', a.last_name)
-                                                                     WHEN cc.commenter_type = 'coordinator' THEN CONCAT(c.first_name, ' ', c.last_name)
-                                                                     ELSE CONCAT(s.first_name, ' ', s.last_name)
-                                                                 END as commenter_name,
-                                                                 cc.commenter_type
-                                                                 FROM chapter_comments cc
-                                                                 LEFT JOIN advisors a ON cc.commenter_type = 'advisor' AND cc.commenter_id = a.id
-                                                                 LEFT JOIN coordinators c ON cc.commenter_type = 'coordinator' AND cc.commenter_id = c.id
-                                                                 LEFT JOIN students s ON cc.commenter_type = 'student' AND cc.commenter_id = s.id
-                                                                 WHERE cc.chapter_id = ?
-                                                                 ORDER BY cc.created_at DESC
-                                                                 LIMIT 1";
-                                                $stmt_comment = $conn->prepare($comment_query);
-                                                $stmt_comment->bind_param("i", $chapter['id']);
-                                                $stmt_comment->execute();
-                                                $comment_result = $stmt_comment->get_result();
-                                                $latest_comment = $comment_result->fetch_assoc();
-                                            ?>
-                                            <?php if ($latest_comment): ?>
-                                            <div class="chapter-feedback">
-                                                <strong><?php echo htmlspecialchars($latest_comment['commenter_name']); ?> (<?php echo ucfirst($latest_comment['commenter_type']); ?>):</strong>
-                                                <?php echo htmlspecialchars($latest_comment['comment']); ?>
-                                                <div class="comment-date"><?php echo date('M j, Y', strtotime($latest_comment['created_at'])); ?></div>
+                                        <?php else: ?>
+                                            <?php foreach ($chapters as $chapter): ?>
+                                            <div class="chapter-detail clickable-chapter" onclick="window.location.href='advisor_reviews.php'">
+                                                <div class="chapter-detail-header">
+                                                    <div class="chapter-title-section">
+                                                        <span class="chapter-name">Chapter <?php echo $chapter['chapter_number']; ?>: <?php echo htmlspecialchars($chapter['chapter_name']); ?></span>
+                                                        <div class="chapter-meta">
+                                                            <span class="version-badge">
+                                                                Version <?php echo $chapter['version']; ?>
+                                                            </span>
+                                                            <?php if ($chapter['has_feedback'] > 0): ?>
+                                                                <span class="feedback-badge has-feedback">
+                                                                    <i class="fas fa-comment"></i> Feedback Given
+                                                                </span>
+                                                            <?php else: ?>
+                                                                <span class="feedback-badge no-feedback">
+                                                                    <i class="fas fa-comment-slash"></i> No Feedback
+                                                                </span>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                    <span class="chapter-score <?php
+                                                            if ($chapter['status'] == 'approved') echo 'completed';
+                                                            elseif ($chapter['status'] == 'needs_revision') echo 'needs-revision';
+                                                            else echo 'in-progress';
+                                                        ?>">
+                                                        <?php echo ucfirst(str_replace('_', ' ', $chapter['status'])); ?>
+                                                    </span>
+                                                </div>
                                             </div>
-                                            <?php else: ?>
-                                            <div class="chapter-feedback">No feedback yet.</div>
-                                            <?php endif; ?>
-                                            <div class="chapter-actions">
-                                                <button class="btn-secondary btn-small" 
-                                                        onclick="viewChapterFile('group<?php echo $group_info['id']; ?>', 'chapter<?php echo $chapter['chapter_number']; ?>')">
-                                                    View File
-                                                </button>
-                                                <button class="btn-secondary btn-small" 
-                                                        onclick="editFeedback('group<?php echo $group_info['id']; ?>', 'chapter<?php echo $chapter['chapter_number']; ?>')">
-                                                    <?php echo ($latest_comment) ? 'Edit Feedback' : 'Add Feedback'; ?>
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <?php endforeach; ?>
+                                            <?php endforeach; ?>
+                                        <?php endif; ?>
                                     </div>
                                 </div>
                                 <?php endforeach; ?>
                             <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Review Modal -->
-                <div id="reviewModal" class="modal">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3 id="reviewTitle">Review Chapter</h3>
-                            <span class="close" onclick="closeModal()">&times;</span>
-                        </div>
-                        <div class="modal-body">
-                            <div class="form-group">
-                                <label for="scoreInput">Score (0-100):</label>
-                                <input type="number" id="scoreInput" min="0" max="100" placeholder="Enter score">
-                            </div>
-                            <div class="form-group">
-                                <label for="statusSelect">Status:</label>
-                                <select id="statusSelect">
-                                    <option value="approved">Approved</option>
-                                    <option value="needs_revision">Needs Revision</option>
-                                    <option value="in_progress">In Progress</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label for="feedbackText">Feedback:</label>
-                                <textarea id="feedbackText" rows="6" placeholder="Provide detailed feedback..."></textarea>
-                            </div>
-                        </div>
-                        <div class="modal-footer">
-                            <button class="btn-primary" onclick="submitReview()">Submit Review</button>
-                            <button class="btn-secondary" onclick="closeModal()">Cancel</button>
                         </div>
                     </div>
                 </div>
@@ -409,6 +461,6 @@ try {
     </div>
 
     <script src="../JS/advisor_group.js"></script>
-    
 </body>
+    <script src="../JS/session_timeout.js"></script>
 </html>
